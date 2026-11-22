@@ -795,3 +795,53 @@ fn windows_system_font_weight_matches_for_ascii_and_unicode() {
     assert_eq!(inter_ascii, first_face(&mut ts, "Sample…", &[], inter, 0));
     assert_eq!(inter_ascii.2, 500);
 }
+#[test]
+fn letter_spacing_applies_in_shaping_wrapping_and_caret_positions() {
+    const HERO: TextStyle = TextStyle::new(32.0, 700.0).letter_spacing(-0.025);
+    assert!((HERO.tracking - (-0.8)).abs() < 1e-6);
+
+    let mut ts = TextSystem::default();
+    let base = TextStyle::new(32.0, 400.0);
+    let tight = base.letter_spacing(-0.025);
+    let wide = base.letter_spacing(0.1);
+    let sample = "Halo Infinite";
+    let n = sample.chars().count() as f32;
+
+    // Widths scale cleanly across DPI and shift by `em * size` per glyph.
+    for scale in [1.0, 2.0] {
+        let w_base = ts.layout_rich(sample, &[], base, scale, None).full_width() / scale;
+        let w_tight = ts.layout_rich(sample, &[], tight, scale, None).full_width() / scale;
+        let w_wide = ts.layout_rich(sample, &[], wide, scale, None).full_width() / scale;
+        assert!(w_tight < w_base, "negative letter_spacing narrows width: {w_tight} vs {w_base}");
+        assert!(w_wide > w_base, "positive letter_spacing widens width: {w_wide} vs {w_base}");
+        assert!(((w_tight - w_base) - (-0.025 * 32.0 * n)).abs() < 0.2, "tight delta: {} vs {}", w_tight - w_base, -0.025 * 32.0 * n);
+        assert!(((w_wide - w_base) - (0.1 * 32.0 * n)).abs() < 0.2, "wide delta: {} vs {}", w_wide - w_base, 0.1 * 32.0 * n);
+    }
+
+    // Wrapping accounts for letter spacing: a width between tight and base wraps base/wide, not tight.
+    let w_tight = ts.layout_rich(sample, &[], tight, 1.0, None).full_width();
+    let w_base = ts.layout_rich(sample, &[], base, 1.0, None).full_width();
+    let mid_w = (w_tight + w_base) * 0.5;
+    assert_eq!(ts.layout_rich(sample, &[], tight, 1.0, Some(mid_w)).len(), 1);
+    assert!(ts.layout_rich(sample, &[], base, 1.0, Some(mid_w)).len() >= 2);
+    assert!(ts.layout_rich(sample, &[], wide, 1.0, Some(mid_w)).len() >= 2);
+
+    // Caret geometry and hit testing account for letter spacing.
+    let l_base = ts.layout_rich(sample, &[], base, 1.0, None);
+    let l_tight = ts.layout_rich(sample, &[], tight, 1.0, None);
+    let l_wide = ts.layout_rich(sample, &[], wide, 1.0, None);
+    let caret_x = |l: &Layout<Ink>, byte: usize| {
+        let c = parley::editing::Cursor::from_byte_index(l, byte, parley::layout::Affinity::Downstream);
+        cursor_geometry(&c, l, 1.0).x0 as f32
+    };
+    let mid = 5; // start of "Infinite"
+    let xb = caret_x(&l_base, mid);
+    let xt = caret_x(&l_tight, mid);
+    let xw = caret_x(&l_wide, mid);
+    assert!(xt < xb && xb < xw, "caret x should follow letter_spacing: {xt} < {xb} < {xw}");
+    let hit_tight = cursor_from_point(&l_tight, xt + 0.5, 10.0);
+    assert_eq!(hit_tight.index(), mid);
+    let hit_wide = cursor_from_point(&l_wide, xw + 0.5, 10.0);
+    assert_eq!(hit_wide.index(), mid);
+}
+
