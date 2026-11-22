@@ -65,7 +65,7 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
     // Match CPU opacity folding (`render/instance.rs` `end_layer`):
     // - Rect (0) and Gradient (4) carry opacity in `params.w` for `border_over`.
     // - Gradient (4) carries its bottom colour in `uv`.
-    // - Glyph (2) and Layer (8) store non-colour data in `border`.
+    // - Glyph (2), Image (7) and Layer (8) store non-colour data in `border`.
     if (kind < 0.5) {
         i.border *= alpha;
         i.params.w *= alpha;
@@ -73,7 +73,7 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
         i.border *= alpha;
         i.uv *= alpha;
         i.params.w *= alpha;
-    } else if (!(kind > 1.5 && kind < 2.5) && !(kind > 7.5 && kind < 8.5)) {
+    } else if (!(kind > 1.5 && kind < 2.5) && !(kind > 6.5 && kind < 8.5)) {
         i.border *= alpha;
     }
     // Vector endpoints are screen-space geometry, unlike image/glyph atlas UVs.

@@ -1,0 +1,1 @@
+- **`El::saturate(amount)` filters image elements (`pixels`, `pixels_fit` and colour icons) in the shader like CSS `filter: saturate(amount)`.** `0.0` produces Rec. 709 greyscale, `1.0` leaves colours unchanged and values above `1.0` boost saturation, with no CPU pixel re-encoding; `cpu_boot` applies the same formula.
