@@ -264,9 +264,11 @@ impl RuntimeCore {
                 self.paint.scale_frame = Some(AnotherFrame);
             }
             // Text whose scale moves draws from its outlines, magnified to `tk`: crisp all the way,
-            // and the same outline on the frame it lands as the atlas mask it rests as.
-            let place_masks = self.text.begin_text(node_id.0, cover.is_none() && scale_motion != ScaleMotion::Still)
-                .into_iter().any(|e| e == crate::text::outline::PathEffect::PlaceMasks);
+            // and the same outline on the frame it lands as the atlas mask it rests as. Gradient
+            // text stays on the atlas path so `border` and `radii[1..=2]` carry the gradient ramp.
+            let place_masks = spec.cold.gradient.is_none()
+                && self.text.begin_text(node_id.0, cover.is_none() && scale_motion != ScaleMotion::Still)
+                    .into_iter().any(|e| e == crate::text::outline::PathEffect::PlaceMasks);
             // The frame it lands draws outlines while its masks are placed; one more frame draws
             // the masks, so text never rests on its landing frame.
             if place_masks {
@@ -287,6 +289,8 @@ impl RuntimeCore {
             } else {
                 zr
             };
+            let text_grad = spec.cold.gradient.as_deref()
+                .and_then(|g| TextGradient::new(g, [zr[0], zr[1], zr[2] - zr[0], zr[3] - zr[1]], o, srgb));
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel (plus its rest's
@@ -707,7 +711,10 @@ impl RuntimeCore {
                         use std::hash::{Hash, Hasher};
                         let mut h = rune_motion::Fx::default();
                         (origin.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), shown.map(f32::to_bits), [tk, raster, s].map(f32::to_bits)).hash(&mut h);
-                        (premul(color, o, srgb).map(f32::to_bits), srgb, self.text.emit_key()).hash(&mut h);
+                        (premul(color, o, srgb).map(f32::to_bits), srgb, self.text.emit_key(), text_grad.is_some()).hash(&mut h);
+                        if let Some(tg) = &text_grad {
+                            tg.hash_into(&mut h);
+                        }
                         spans.len().hash(&mut h);
                         for sp in spans.iter() {
                             (sp.start, sp.end, sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits))).hash(&mut h);
@@ -759,16 +766,19 @@ impl RuntimeCore {
                     self.paint.keep.cycles.glyph([x0, y0, x1, y1], !out);
                     if out { continue; }
                     let mut f = base;
+                    let mut override_ink = false;
                     if q.ink > 0
                         && let Some(c) = spans.get(q.ink as usize - 1).and_then(|sp| sp.color)
                     {
                         f = premul(c, o, srgb);
+                        override_ink = true;
                     }
                     let cbyte = piece.content(q.byte as usize);
                     if let Some((a, b, c)) = selected_ink
                         && (a..b).contains(&cbyte)
                     {
                         f = c;
+                        override_ink = true;
                     }
                     if has_hl_fg
                         && let Some(c) = spec.cold.highlights.iter().rev().find_map(|h| {
@@ -777,19 +787,30 @@ impl RuntimeCore {
                         })
                     {
                         f = premul(c, o, srgb);
+                        override_ink = true;
                     }
                     if !link_fx.is_empty() && let Some(c) = link_fx.glyph_color(cbyte as u32) {
                         f = premul(c, o, srgb);
+                        override_ink = true;
                     }
+                    let mut reveal_a = 1.0;
                     if let Some(fade) = reveal {
                         let a = fade.alpha(cbyte as u32, self.scene.store().node_time(n.id));
                         if a <= 0.0 {
                             continue;
                         }
+                        reveal_a = a;
                         f = f.map(|v| v * a);
                     }
-                    self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, clip, fade)
-                        .map(|g| zoom_glyph(g, origin, r_origin, zoom)));
+                    if let Some(g) = glyph_or_image(q, &self.text, &mut self.images, f, clip, fade)
+                        .map(|g| zoom_glyph(g, origin, r_origin, zoom))
+                    {
+                        if let Some(tg) = text_grad.as_ref().filter(|_| !override_ink && q.color == 0) {
+                            tg.push_glyph(g, &self.text, reveal_a, clip, fade, &mut self.instances);
+                        } else {
+                            self.instances.push(g);
+                        }
+                    }
                     *glyph_count += 1;
                     // A colour or outline glyph draws per frame, from another atlas or a record.
                     if q.color != 0 || q.outline.is_some() {
