@@ -16,30 +16,55 @@ pub enum SurfaceFit {
     Fill,
 }
 
-/// `El::surface_anchor` and `El::surface_unscaled`. The default centres and scales by `SurfaceFit`.
+const fn align_share(a: Align) -> f32 {
+    match a {
+        Align::Start => 0.0,
+        Align::Center => 0.5,
+        Align::End => 1.0,
+    }
+}
+
+fn clamp_share(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 }
+}
+
+/// `El::surface_anchor`, `El::surface_anchor_fraction` and `El::surface_unscaled`. The default
+/// centres and scales by `SurfaceFit`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfacePlace {
-    pub anchor: [Align; 2],
+    /// How much of the spare (or cropped) space along each axis lies before the image, in `0.0..=1.0`.
+    pub anchor: [f32; 2],
     pub unscaled: bool,
 }
 
 impl SurfacePlace {
-    pub const CENTRED: SurfacePlace = SurfacePlace { anchor: [Align::Center; 2], unscaled: false };
+    pub const CENTRED: SurfacePlace = SurfacePlace { anchor: [0.5, 0.5], unscaled: false };
+
+    /// Anchor along each axis by [`Align`].
+    pub const fn align(horizontal: Align, vertical: Align) -> Self {
+        Self { anchor: [align_share(horizontal), align_share(vertical)], unscaled: false }
+    }
+
+    /// Anchor along each axis by fraction in `0.0..=1.0` (CSS `object-position`); non-finite
+    /// values fall back to `0.5`.
+    pub fn fraction(horizontal: f32, vertical: f32) -> Self {
+        Self { anchor: [clamp_share(horizontal), clamp_share(vertical)], unscaled: false }
+    }
+
+    /// Draw at one texel per device pixel (`El::surface_unscaled`).
+    pub const fn unscaled(mut self, unscaled: bool) -> Self {
+        self.unscaled = unscaled;
+        self
+    }
+
+    /// How much of the spare (or cropped) space along each axis lies before the image, in `0.0..=1.0`.
+    pub fn share(self) -> [f32; 2] {
+        [clamp_share(self.anchor[0]), clamp_share(self.anchor[1])]
+    }
 }
 
 impl Default for SurfacePlace {
     fn default() -> Self { Self::CENTRED }
-}
-
-impl SurfacePlace {
-    /// How much of the spare (or cropped) space along each axis lies before the image.
-    pub fn share(self) -> [f32; 2] {
-        self.anchor.map(|a| match a {
-            Align::Start => 0.0,
-            Align::Center => 0.5,
-            Align::End => 1.0,
-        })
-    }
 }
 
 /// The image's rect in device pixels inside `node` ([x, y, w, h]); it may overflow the node, which
