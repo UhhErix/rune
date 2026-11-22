@@ -620,7 +620,15 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
     let pm = i.params[2] > shader_consts::FLAG_ON_THRESHOLD;
     let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
     let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
-    scale4(mix4(top, bottom, f[1]), i.fill[3] * clamp01(0.5 - d))
+    let mut c = mix4(top, bottom, f[1]);
+    if i.border[0] != 0.0 {
+        let sat = (1.0 + i.border[0]).max(0.0);
+        let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+        for ch in 0..3 {
+            c[ch] = (luma + (c[ch] - luma) * sat).clamp(0.0, c[3]);
+        }
+    }
+    scale4(c, i.fill[3] * clamp01(0.5 - d))
 }
 
 #[cfg(test)]
