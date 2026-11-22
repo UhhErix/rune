@@ -6,7 +6,7 @@ use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, Surface
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use crate::runtime::{Cx, Env, Runtime};
 
-const TOP_LEFT_1X: SurfacePlace = SurfacePlace { anchor: [Align::Start; 2], unscaled: true };
+const TOP_LEFT_1X: SurfacePlace = SurfacePlace::align(Align::Start, Align::Start).unscaled(true);
 
 macro_rules! on_each_backend {
     ($wgpu:ident, $metal:ident, $body:ident) => {
@@ -24,10 +24,14 @@ macro_rules! on_each_backend {
 
 #[test]
 fn the_element_carries_its_placement_to_the_draw() {
-    type State = (NativeSurface, bool);
+    type State = (NativeSurface, u8);
     fn view(s: &State, _: &mut Cx<State>) -> El {
         let e = el().size(80.0, 60.0).native_surface(&s.0, SurfaceFit::Fill);
-        if s.1 { e.surface_anchor(Align::Start, Align::Start).surface_unscaled(true) } else { e }
+        match s.1 {
+            1 => e.surface_anchor(Align::Start, Align::Start).surface_unscaled(true),
+            2 => e.surface_anchor_fraction(0.5, 0.22),
+            _ => e,
+        }
     }
     let surface = NativeSurface::new();
     surface
@@ -36,8 +40,12 @@ fn the_element_carries_its_placement_to_the_draw() {
             1,
         )
         .unwrap();
-    for (anchored, want) in [(false, SurfacePlace::CENTRED), (true, TOP_LEFT_1X)] {
-        let mut rt = Runtime::new((surface.clone(), anchored), view, (80.0, 60.0), Env::new(true, 1.0));
+    for (mode, want) in [
+        (0, SurfacePlace::CENTRED),
+        (1, TOP_LEFT_1X),
+        (2, SurfacePlace::fraction(0.5, 0.22)),
+    ] {
+        let mut rt = Runtime::new((surface.clone(), mode), view, (80.0, 60.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert_eq!(rt.surfaces.len(), 1);
         assert_eq!(rt.surfaces[0].surface.place(), want);
