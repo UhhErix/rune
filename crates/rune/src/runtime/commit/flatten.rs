@@ -654,7 +654,10 @@ fn flatten_node<E: FlattenEl>(
         device::border(style, vis, scale);
     }
     if let Some(metrics) = el.as_el().cold.list_disc { device::disc(el.style_mut(&mut s), metrics, scale); }
-    if mirror { crate::el::mirror_visual(el.vis_mut(&mut s)); }
+    if mirror {
+        crate::el::mirror_visual(el.vis_mut(&mut s));
+        if let Some(t) = el.text_mut(&mut s) { crate::el::mirror_text(t); }
+    }
     let hover_within = inherit_hover_within(el.vis(&s), el.as_el().cold.above.as_ref(), parent, nodes);
     let pixel_aspect = el.vis(&s).pixels.as_ref()
         .filter(|_| {

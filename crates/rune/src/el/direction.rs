@@ -193,6 +193,17 @@ pub(crate) fn mirror_visual(vis: &mut Visual) {
         cold.clip_corners = Some([tr, tl, bl, br]);
     }
 }
+/// Mirrors a text element's angled linear gradient in right-to-left layout, matching [`mirror_visual`].
+pub(crate) fn mirror_text(spec: &mut TextSpec) {
+    if spec.cold.get().is_none_or(|c| c.gradient.is_none()) {
+        return;
+    }
+    if let Some(g) = &mut spec.cold.gradient
+        && let GradientGeometry::Linear { angle } = &mut g.geometry
+    {
+        *angle = -*angle;
+    }
+}
 /// Mirrors `Side::Left` and `Side::Right` in right-to-left layout.
 pub(crate) fn mirror_side(s: Side) -> Side {
     match s {

@@ -691,6 +691,35 @@ impl El {
         }
         self
     }
+    /// Fill this text's glyphs with a linear gradient across the element's box, like CSS
+    /// `background-clip: text` with `linear-gradient(...)`.
+    ///
+    /// `angle` uses CSS radians (`0.0` is bottom-to-top, `PI / 2` is left-to-right, `PI` is
+    /// top-to-bottom), matching [`El::linear_gradient`], with up to 16 `(position, color)` stops
+    /// in `0.0..=1.0`. Spans or selections with explicit colours override the gradient on their
+    /// glyphs; colour emoji keep their own colours.
+    ///
+    /// ```
+    /// # use std::f32::consts::FRAC_PI_2;
+    /// # use rune::{oklch, text};
+    /// let title = text("Gradient").text_gradient(
+    ///     FRAC_PI_2,
+    ///     [(0.0, oklch(0.75, 0.14, 230.0)), (1.0, oklch(0.72, 0.18, 350.0))],
+    /// );
+    /// ```
+    pub fn text_gradient(mut self, angle: f32, stops: impl AsRef<[(f32, Color)]>) -> Self {
+        if let Some(t) = &mut self.text {
+            let g = angle
+                .is_finite()
+                .then(|| visuals::normalize_gradient_stops(GradientGeometry::Linear { angle }, stops.as_ref()))
+                .flatten()
+                .map(Box::new);
+            if g.is_some() || !t.cold.is_empty() {
+                t.cold.gradient = g;
+            }
+        }
+        self
+    }
     #[inline]
     pub fn align(mut self, a: Align) -> Self {
         self.set_align(a);
