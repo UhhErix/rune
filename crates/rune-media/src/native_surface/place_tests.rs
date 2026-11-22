@@ -3,8 +3,8 @@ use super::place::{Align, SurfacePlace, image_rect};
 use super::*;
 use rune_image::pixels::fit;
 
-const TOP_LEFT: SurfacePlace = SurfacePlace { anchor: [Align::Start; 2], unscaled: false };
-const TOP_LEFT_1X: SurfacePlace = SurfacePlace { anchor: [Align::Start; 2], unscaled: true };
+const TOP_LEFT: SurfacePlace = SurfacePlace::align(Align::Start, Align::Start);
+const TOP_LEFT_1X: SurfacePlace = SurfacePlace::align(Align::Start, Align::Start).unscaled(true);
 fn near(got: [f32; 4], want: [f32; 4], what: &str) {
     assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3), "{what}: {got:?} vs {want:?}");
 }
@@ -36,8 +36,33 @@ fn unscaled_keeps_texels_and_loses_only_the_far_edges() {
     assert_eq!(at([0.0, 0.0, 120.0, 50.0]), [0.0, 0.0, 100.0, 50.0], "grow: gap at the right");
     assert_eq!(at([0.0, 0.0, 80.0, 60.0]), [0.0, 0.0, 100.0, 50.0], "shrink: node clips the right; gap below");
     assert_eq!(image_rect([7.0, 9.0, 120.0, 50.0], STALE, SurfaceFit::Fit, TOP_LEFT_1X), [7.0, 9.0, 100.0, 50.0], "fit is ignored");
-    let end = SurfacePlace { anchor: [Align::End, Align::End], unscaled: true };
+    let end = SurfacePlace::align(Align::End, Align::End).unscaled(true);
     assert_eq!(image_rect([0.0, 0.0, 80.0, 60.0], STALE, SurfaceFit::Fit, end), [-20.0, 10.0, 100.0, 50.0]);
+}
+
+#[test]
+fn fractional_anchor_matches_object_position_for_surfaces_and_pixels() {
+    use SurfaceFit::{Fill, Fit};
+    let pos = SurfacePlace::fraction(0.5, 0.22);
+    // 200x200 source filling a 200x100 node overflows vertically by 100px: 22% cropped above, 78% below.
+    near(image_rect([0.0, 0.0, 200.0, 100.0], [200, 200], Fill, pos), [0.0, -22.0, 200.0, 200.0], "fill 50% 22%");
+    let (rect, crop) = fit(Some(Fill), pos, [0.0, 0.0, 200.0, 100.0], (200, 200));
+    assert_eq!(rect, [0.0, 0.0, 200.0, 100.0]);
+    near(crop, [0.0, 0.11, 1.0, 0.61], "pixels fill 50% 22%");
+
+    // 200x200 source filling a 100x200 node with x=0.25 overflows horizontally by 100px: 25px cropped left.
+    let left_quarter = SurfacePlace::fraction(0.25, 0.5);
+    near(image_rect([0.0, 0.0, 100.0, 200.0], [200, 200], Fill, left_quarter), [-25.0, 0.0, 200.0, 200.0], "fill 25% 50%");
+    let (_, crop) = fit(Some(Fill), left_quarter, [0.0, 0.0, 100.0, 200.0], (200, 200));
+    near(crop, [0.125, 0.0, 0.625, 1.0], "pixels fill 25% 50%");
+
+    // Fit letterboxes by the same fraction.
+    near(image_rect([0.0, 0.0, 200.0, 100.0], [100, 100], Fit, left_quarter), [25.0, 0.0, 100.0, 100.0], "fit 25% 50%");
+
+    // Clamping and non-finite fallback keep UVs within [0, 1].
+    assert_eq!(SurfacePlace::fraction(-1.0, 2.0).share(), [0.0, 1.0]);
+    assert_eq!(SurfacePlace::fraction(f32::NAN, f32::INFINITY).share(), [0.5, 0.5]);
+    assert_eq!(SurfacePlace::fraction(0.0, 1.0), SurfacePlace::align(Align::Start, Align::End));
 }
 
 #[test]
