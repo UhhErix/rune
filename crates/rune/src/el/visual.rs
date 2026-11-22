@@ -58,6 +58,8 @@ pub struct VisualCold {
     pub pixels: Option<crate::pixels::Pixels>,
     /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
     pub pixels_fit: Option<crate::SurfaceFit>,
+    /// Saturation multiplier for image elements (`El::saturate`); `1.0` is unchanged, `0.0` greyscale.
+    pub(crate) saturation: f32,
     /// An effect slot (`El::effect`).
     pub(crate) effect: Option<crate::el::effect::EffectSlot>,
     /// Backdrop blur standard deviation in points (`El::backdrop_blur`); 0 is off.
@@ -154,6 +156,7 @@ impl Empty for VisualCold {
         grid: None,
         pixels: None,
         pixels_fit: None,
+        saturation: 1.0,
         effect: None,
         backdrop_blur: 0.0,
         hover_motion: None,

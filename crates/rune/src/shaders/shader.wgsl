@@ -502,8 +502,13 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             let t0 = clamp(lo + vec2<i32>(base), lo, hi);
             let t1 = clamp(lo + vec2<i32>(base) + vec2<i32>(1, 1), lo, hi);
             let premultiplied = i.params.z > 0.5;
-            let c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
+            var c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
                         mix(image_texel(vec2<i32>(t0.x, t1.y), premultiplied), image_texel(t1, premultiplied), f.x), f.y);
+            if (i.border.x != 0.0) {
+                let sat = max(1.0 + i.border.x, 0.0);
+                let luma = dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+                c = vec4<f32>(clamp(mix(vec3<f32>(luma), c.rgb, sat), vec3<f32>(0.0), vec3<f32>(c.a)), c.a);
+            }
             col = c * (i.fill.a * clamp(0.5 - d, 0.0, 1.0));
         }
     } else if (kind > 4.5 && kind < 5.5) {
