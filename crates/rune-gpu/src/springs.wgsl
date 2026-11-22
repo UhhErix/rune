@@ -65,7 +65,9 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
     // Match CPU opacity folding (`render/instance.rs` `end_layer`):
     // - Rect (0) and Gradient (4) carry opacity in `params.w` for `border_over`.
     // - Gradient (4) carries its bottom colour in `uv`.
-    // - Glyph (2), Image (7) and Layer (8) store non-colour data in `border`.
+    // - Glyph (2) stores non-colour data in `border` unless it is a gradient atlas glyph
+    //   (`radii.w == 0 && (radii.y != 0 || radii.z != 0)`).
+    // - Image (7) stores saturation delta in `border.x`, and Layer (8) stores transform data.
     if (kind < 0.5) {
         i.border *= alpha;
         i.params.w *= alpha;
@@ -73,7 +75,11 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
         i.border *= alpha;
         i.uv *= alpha;
         i.params.w *= alpha;
-    } else if (!(kind > 1.5 && kind < 2.5) && !(kind > 6.5 && kind < 8.5)) {
+    } else if (kind > 1.5 && kind < 2.5) {
+        if (i.radii.w == 0.0 && (i.radii.y != 0.0 || i.radii.z != 0.0)) {
+            i.border *= alpha;
+        }
+    } else if (!(kind > 6.5 && kind < 8.5)) {
         i.border *= alpha;
     }
     // Vector endpoints are screen-space geometry, unlike image/glyph atlas UVs.

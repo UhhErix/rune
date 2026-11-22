@@ -245,7 +245,15 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
     d.push(("line-height", px(if s.line_height > 0.0 { s.line_height } else { s.size * 1.25 })));
     if s.tracking != 0.0 { d.push(("letter-spacing", px(s.tracking))); }
     if s.italic { d.push(("font-style", "italic".into())); }
-    d.push(("color", color(spec.color)));
+    if let Some(g) = spec.cold.gradient.as_deref() {
+        d.push(("background-image", gradient(g, (0.0, 0.0))));
+        d.push(("-webkit-background-clip", "text".into()));
+        d.push(("background-clip", "text".into()));
+        d.push(("-webkit-text-fill-color", "transparent".into()));
+        d.push(("color", "transparent".into()));
+    } else {
+        d.push(("color", color(spec.color)));
+    }
     match spec.align {
         crate::el::Align::Start => {}
         crate::el::Align::Center => d.push(("text-align", "center".into())),

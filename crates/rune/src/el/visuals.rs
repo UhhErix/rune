@@ -643,7 +643,7 @@ pub(crate) struct RadialGradient {
     pub(crate) stops: Vec<(f32, Color)>,
 }
 
-fn normalize_gradient_stops(geometry: GradientGeometry, raw: &[(f32, Color)]) -> Option<RadialGradient> {
+pub(crate) fn normalize_gradient_stops(geometry: GradientGeometry, raw: &[(f32, Color)]) -> Option<RadialGradient> {
     let mut stops: Vec<(f32, Color)> = raw
         .iter()
         .copied()

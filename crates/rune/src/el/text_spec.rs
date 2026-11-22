@@ -121,6 +121,8 @@ pub(crate) struct TextCold {
     pub(crate) pill_colors: Option<(Color, Option<Color>)>,
     /// Visual palette for rich block and inline decorations; the default's when unset.
     pub(crate) rich_style: Option<crate::edit::RichStyle>,
+    /// Linear gradient fill clipped to this text's glyphs (`El::text_gradient`).
+    pub(crate) gradient: Option<Box<crate::el::RadialGradient>>,
     pub(crate) secure_revealed: bool,
 }
 
@@ -146,6 +148,7 @@ impl Empty for TextCold {
         isolates: Vec::new(),
         pill_colors: None,
         rich_style: None,
+        gradient: None,
         secure_revealed: false,
     };
 }
