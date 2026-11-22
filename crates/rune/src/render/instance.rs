@@ -153,6 +153,9 @@ impl Kind {
 /// gives per-side widths `[top, right, bottom, left]`; `params.x` is then the widest.
 pub const KIND_RECT: f32 = Kind::Rect.as_f32();
 pub const KIND_SHADOW: f32 = Kind::Shadow.as_f32();
+/// Glyph-atlas or outline text. When `radii[3] == 0.0` (atlas glyph) and `radii[1..=2]` is
+/// non-zero, `radii[1..=2]` holds the linear gradient step per device pixel and ink runs from
+/// `fill` at the minimum-projection corner of `rect` to `border` at the opposite corner.
 pub const KIND_GLYPH: f32 = Kind::Glyph.as_f32();
 /// Inset shadow inside a rounded rect: `params.x` spread, `params.z` sigma, `uv.xy` offset.
 pub const KIND_INSET: f32 = Kind::Inset.as_f32();
@@ -765,10 +768,17 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
             let i = &mut instances[start + 1];
             if transfer_clip { i.clip = scope.clip; i.fade = scope.fade; }
             i.fill = i.fill.map(|v| v * opacity);
-            // A glyph's and an image's `border` hold non-colour data (outline record / saturation delta).
+            // A glyph's `border` holds no colour except on gradient atlas glyphs (`radii[3] == 0`
+            // and `radii[1..=2]` non-zero); an outline glyph's `border` names its record, and an
+            // image's `border[0]` stores its saturation delta.
             // A box's `params.w` is the opacity its colours carry (shader.wgsl `border_over`).
             match i.kind() {
-                Some(Kind::Glyph | Kind::Image) => {}
+                Some(Kind::Glyph) => {
+                    if i.radii[3] == 0.0 && (i.radii[1] != 0.0 || i.radii[2] != 0.0) {
+                        i.border = i.border.map(|v| v * opacity);
+                    }
+                }
+                Some(Kind::Image) => {}
                 Some(Kind::Rect) => {
                     i.border = i.border.map(|v| v * opacity);
                     i.params[3] *= opacity;

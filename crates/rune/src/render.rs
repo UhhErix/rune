@@ -57,6 +57,8 @@ mod abi_tests;
 #[cfg(test)]
 mod backdrop_tests;
 #[cfg(test)]
+mod gradient_text_tests;
+#[cfg(test)]
 mod image_tests;
 #[cfg(test)]
 #[path = "render/native_surface_tests.rs"]
