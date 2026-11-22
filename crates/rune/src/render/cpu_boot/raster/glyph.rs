@@ -48,6 +48,18 @@ impl Painter<'_, '_> {
         let (sin, cos) = turn.sin_cos();
         let centre = [i.rect[0] + i.rect[2] * 0.5, i.rect[1] + i.rect[3] * 0.5];
         let span = if i.uv[2] > 0.0 { [i.uv[2], i.uv[3]] } else { [i.rect[2], i.rect[3]] };
+        let has_grad = i.radii[1] != 0.0 || i.radii[2] != 0.0;
+        let gorigin = [
+            i.rect[0] + if i.radii[1] >= 0.0 { 0.0 } else { i.rect[2] },
+            i.rect[1] + if i.radii[2] >= 0.0 { 0.0 } else { i.rect[3] },
+        ];
+        let ink_at = |px: f32, py: f32| -> [f32; 4] {
+            if !has_grad {
+                return i.fill;
+            }
+            let u = ((px - gorigin[0]) * i.radii[1] + (py - gorigin[1]) * i.radii[2]).clamp(0.0, 1.0);
+            std::array::from_fn(|k| i.fill[k] + (i.border[k] - i.fill[k]) * u)
+        };
         let table = self.pow.index(e);
         let mut count = 0;
         let segs = self.segments(r, None, clip);
@@ -69,7 +81,7 @@ impl Painter<'_, '_> {
                     let px = x as f32 + 0.5;
                     let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
                     let cov = self.pow.tables[table].1[v as usize];
-                    self.put(x, y, i.fill.map(|f| f * cov * a));
+                    self.put(x, y, ink_at(px, py).map(|f| f * cov * a));
                 }
                 continue;
             }
@@ -83,13 +95,14 @@ impl Painter<'_, '_> {
                     count += 1;
                     let a = alpha();
                     let mean = ((c3[0] as f32 + c3[1] as f32 + c3[2] as f32) / shader_consts::OUTLINE_SUBPIXEL_STRIDE / 255.0).powf(e);
+                    let ink = ink_at(px, py);
                     if by_channel {
                         if mean < LCD_MEAN_EPSILON { continue; }
                         let kc = c3.map(|v| self.pow.tables[table].1[v as usize]);
-                        let f = i.fill.map(|v| v * a);
+                        let f = ink.map(|v| v * a);
                         self.surface.blend_lcd(x, y, [f[0] * kc[0], f[1] * kc[1], f[2] * kc[2], f[3] * mean], kc.map(|v| f[3] * v));
                     } else {
-                        self.put(x, y, i.fill.map(|v| v * mean * a));
+                        self.put(x, y, ink.map(|v| v * mean * a));
                     }
                     continue;
                 }
@@ -116,7 +129,7 @@ impl Painter<'_, '_> {
                 };
                 count += 1;
                 let a = alpha();
-                self.put(x, y, i.fill.map(|v| v * cov * a));
+                self.put(x, y, ink_at(px, py).map(|v| v * cov * a));
             }
         }
         self.stats.glyph_px += count;

@@ -348,3 +348,224 @@ pub(in crate::runtime) fn push_spelling_marker(out: &mut Vec<Instance>, x0: f32,
         rect_inst([start + n as f32, (y + wave * k).round(), 1.0, t], color, 0.0, clip, fade)
     }));
 }
+
+/// Prepared linear gradient for a text element (`El::text_gradient`) in device pixels.
+pub(in crate::runtime) struct TextGradient {
+    center: [f32; 2],
+    /// Gradient vector per device pixel: `t(p) = 0.5 + dot(p - center, vec)`.
+    vec: [f32; 2],
+    stops: [(f32, [f32; 4]); crate::el::MAX_GRADIENT_STOPS],
+    len: usize,
+}
+
+impl TextGradient {
+    pub(in crate::runtime) fn new(grad: &crate::el::RadialGradient, rect: [f32; 4], opacity: f32, srgb: bool) -> Option<Self> {
+        let crate::el::GradientGeometry::Linear { angle } = grad.geometry else { return None };
+        let len = grad.stops.len().min(crate::el::MAX_GRADIENT_STOPS);
+        if len == 0 {
+            return None;
+        }
+        let (sin, cos) = angle.sin_cos();
+        let (dx, dy) = (sin, -cos);
+        let (w, h) = (rect[2].max(1e-3), rect[3].max(1e-3));
+        let span = (dx.abs() * w + dy.abs() * h).max(1e-3);
+        let mut stops = [(0.0, [0.0; 4]); crate::el::MAX_GRADIENT_STOPS];
+        for (dst, &(t, c)) in stops.iter_mut().zip(&grad.stops[..len]) {
+            *dst = (t, premul(c, opacity, srgb));
+        }
+        Some(Self {
+            center: [rect[0] + w * 0.5, rect[1] + h * 0.5],
+            vec: [dx / span, dy / span],
+            stops,
+            len,
+        })
+    }
+
+    pub(in crate::runtime) fn hash_into(&self, h: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        (self.center.map(f32::to_bits), self.vec.map(f32::to_bits), self.len).hash(h);
+        for &(t, c) in &self.stops[..self.len] {
+            (t.to_bits(), c.map(f32::to_bits)).hash(h);
+        }
+    }
+
+    /// Colour at `t`, taking the right-hand side of a hard stop (`s[k] == s[k + 1] == t`).
+    fn sample_after(&self, t: f32) -> [f32; 4] {
+        let stops = &self.stops[..self.len];
+        if t < stops[0].0 {
+            return stops[0].1;
+        }
+        if t >= stops[self.len - 1].0 {
+            return stops[self.len - 1].1;
+        }
+        let mut i = 0;
+        while i + 1 < self.len && stops[i + 1].0 <= t {
+            i += 1;
+        }
+        if i + 1 >= self.len {
+            return stops[self.len - 1].1;
+        }
+        let (s0, c0) = stops[i];
+        let (s1, c1) = stops[i + 1];
+        let u = if s1 <= s0 + 1e-6 { 0.0 } else { ((t - s0) / (s1 - s0)).clamp(0.0, 1.0) };
+        std::array::from_fn(|j| c0[j] + (c1[j] - c0[j]) * u)
+    }
+
+    /// Colour at `t`, taking the left-hand side of a hard stop (`s[k] == s[k + 1] == t`).
+    fn sample_before(&self, t: f32) -> [f32; 4] {
+        let stops = &self.stops[..self.len];
+        if t <= stops[0].0 {
+            return stops[0].1;
+        }
+        if t > stops[self.len - 1].0 {
+            return stops[self.len - 1].1;
+        }
+        let mut i = 0;
+        while i + 1 < self.len && stops[i + 1].0 < t {
+            i += 1;
+        }
+        if i + 1 >= self.len {
+            return stops[self.len - 1].1;
+        }
+        let (s0, c0) = stops[i];
+        let (s1, c1) = stops[i + 1];
+        let u = if s1 <= s0 + 1e-6 { 1.0 } else { ((t - s0) / (s1 - s0)).clamp(0.0, 1.0) };
+        std::array::from_fn(|j| c0[j] + (c1[j] - c0[j]) * u)
+    }
+
+    /// Pushes one or more atlas `KIND_GLYPH` instances filling `g` with this linear gradient.
+    /// Axis-aligned multi-stop gradients split a glyph straddling an interior stop on whole pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn push_glyph(
+        &self,
+        g: Instance,
+        text: &TextSystem,
+        alpha_scale: f32,
+        clip_outer: [f32; 4],
+        fade_raw: [f32; 4],
+        out: &mut Vec<Instance>,
+    ) -> usize {
+        let emit = |mut inst: Instance, f0: [f32; 4], f1: [f32; 4], mid: [f32; 4], kx: f32, ky: f32, out: &mut Vec<Instance>| {
+            let f0 = f0.map(|v| v * alpha_scale);
+            let f1 = f1.map(|v| v * alpha_scale);
+            let mid = mid.map(|v| v * alpha_scale);
+            inst.params[3] = text.coverage_exponent(mid);
+            if (kx == 0.0 && ky == 0.0) || f0 == f1 {
+                inst.fill = f0;
+                inst.border = [0.0; 4];
+                inst.radii[1] = 0.0;
+                inst.radii[2] = 0.0;
+            } else {
+                inst.fill = f0;
+                inst.border = f1;
+                inst.radii[1] = kx;
+                inst.radii[2] = ky;
+            }
+            out.push(inst);
+        };
+
+        let (vx, vy) = (self.vec[0], self.vec[1]);
+        let [rx, ry, rw, rh] = g.rect;
+        let ox = if vx >= 0.0 { rx } else { rx + rw };
+        let oy = if vy >= 0.0 { ry } else { ry + rh };
+        let t_min = 0.5 + (ox - self.center[0]) * vx + (oy - self.center[1]) * vy;
+        let dt = vx.abs() * rw + vy.abs() * rh;
+        let t_max = t_min + dt;
+        if dt <= 1e-6 {
+            let c = self.sample_after(t_min);
+            emit(g, c, c, c, 0.0, 0.0, out);
+            return 1;
+        }
+
+        let mut breaks = [0.0f32; crate::el::MAX_GRADIENT_STOPS + 2];
+        let mut nb = 0usize;
+        breaks[nb] = t_min;
+        nb += 1;
+        for &(s, _) in &self.stops[..self.len] {
+            if s > t_min + 1e-6 && s < t_max - 1e-6 && (s - breaks[nb - 1]).abs() > 1e-6 {
+                breaks[nb] = s;
+                nb += 1;
+            }
+        }
+        breaks[nb] = t_max;
+        nb += 1;
+
+        let horiz = vy.abs() < 1e-6 && vx.abs() > 1e-6;
+        let vert = vx.abs() < 1e-6 && vy.abs() > 1e-6;
+        if nb == 2 || (!horiz && !vert) {
+            let c0 = self.sample_after(t_min);
+            let c1 = self.sample_before(t_max);
+            let mid = std::array::from_fn(|j| 0.5 * (c0[j] + c1[j]));
+            emit(g, c0, c1, mid, vx / dt, vy / dt, out);
+            return 1;
+        }
+
+        let mut pushed = 0usize;
+        for seg in 0..nb - 1 {
+            let (a, b) = (breaks[seg], breaks[seg + 1]);
+            let (cut_a, cut_b) = (seg > 0, seg + 2 < nb);
+            let mut sub_clip = g.clip;
+            let mut sub_fade = fade_raw;
+            if horiz {
+                let xa = self.center[0] + (a - 0.5) / vx;
+                let xb = self.center[0] + (b - 0.5) / vx;
+                let (lo, hi, cut_lo, cut_hi) = if vx > 0.0 { (xa, xb, cut_a, cut_b) } else { (xb, xa, cut_b, cut_a) };
+                if cut_lo {
+                    let c = lo.round();
+                    if c > sub_clip[0] {
+                        sub_clip[0] = c;
+                        sub_fade[0] = 0.0;
+                    }
+                }
+                if cut_hi {
+                    let c = hi.round();
+                    if c < sub_clip[2] {
+                        sub_clip[2] = c;
+                        sub_fade[2] = 0.0;
+                    }
+                }
+                if sub_clip[0] >= sub_clip[2] {
+                    continue;
+                }
+            } else {
+                let ya = self.center[1] + (a - 0.5) / vy;
+                let yb = self.center[1] + (b - 0.5) / vy;
+                let (lo, hi, cut_lo, cut_hi) = if vy > 0.0 { (ya, yb, cut_a, cut_b) } else { (yb, ya, cut_b, cut_a) };
+                if cut_lo {
+                    let c = lo.round();
+                    if c > sub_clip[1] {
+                        sub_clip[1] = c;
+                        sub_fade[1] = 0.0;
+                    }
+                }
+                if cut_hi {
+                    let c = hi.round();
+                    if c < sub_clip[3] {
+                        sub_clip[3] = c;
+                        sub_fade[3] = 0.0;
+                    }
+                }
+                if sub_clip[1] >= sub_clip[3] {
+                    continue;
+                }
+            }
+            let ca = self.sample_after(a);
+            let cb = self.sample_before(b);
+            let mid = std::array::from_fn(|j| 0.5 * (ca[j] + cb[j]));
+            let mut sub = g;
+            sub.clip = sub_clip;
+            sub.fade = crate::render::pack_fade(sub_fade, sub_clip, clip_outer);
+            if ca == cb || (b - a) <= 1e-6 {
+                emit(sub, ca, ca, mid, 0.0, 0.0, out);
+            } else {
+                let u0 = (t_min - a) / (b - a);
+                let u1 = (t_max - a) / (b - a);
+                let f0 = std::array::from_fn(|j| ca[j] + (cb[j] - ca[j]) * u0);
+                let f1 = std::array::from_fn(|j| ca[j] + (cb[j] - ca[j]) * u1);
+                emit(sub, f0, f1, mid, vx / dt, vy / dt, out);
+            }
+            pushed += 1;
+        }
+        pushed
+    }
+}
