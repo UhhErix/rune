@@ -259,3 +259,91 @@ fn gpu_pixels_fit_letterboxes_and_fill_crops() {
     }
     assert!(out.as_chunks::<4>().0.iter().all(|p| p[0] < 200), "red and white columns are cropped");
 }
+
+#[test]
+fn gpu_and_cpu_boot_saturate_images_in_shader() {
+    use crate::el::{El, el};
+    use crate::render::{Gpu, Offscreen, Renderer, cpu_boot};
+    use crate::runtime::{Cx, Env, Runtime};
+
+    type State = (Pixels, f32, bool);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let e = el().size(4.0, 4.0);
+        let e = if s.2 { e.pixels_fit(&s.0, crate::SurfaceFit::Fill) } else { e.pixels(&s.0) };
+        e.saturate(s.1)
+    }
+
+    // Pure red, pure green, pure blue, mid orange — opaque RGBA.
+    let src: Vec<u8> = [[255u8, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [220, 120, 40, 255]]
+        .iter()
+        .flat_map(|c| c.repeat(4))
+        .collect();
+    let px = Pixels::new();
+    px.set(4, 4, src.clone());
+
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+    renderer.set_srgb_blend(true);
+    let target = Offscreen::with_format(&gpu.device, 4, 4, wgpu::TextureFormat::Bgra8Unorm);
+
+    let expected = |rgb: [u8; 3], sat: f32| -> [u8; 3] {
+        let f = rgb.map(|c| c as f32 / 255.0);
+        let luma = f[0] * 0.2126 + f[1] * 0.7152 + f[2] * 0.0722;
+        f.map(|c| ((luma + (c - luma) * sat).clamp(0.0, 1.0) * 255.0).round() as u8)
+    };
+
+    for (sat, use_fit) in [(1.0, false), (0.0, true), (0.45, true), (1.8, false)] {
+        let mut rt = Runtime::new((px.clone(), sat, use_fit), view, (4.0, 4.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 4));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        gpu.queue.submit([enc.finish()]);
+        let gpu_bgra = target.read(&gpu.device);
+
+        // cpu_boot produces the same saturated pixels.
+        let mut cpu_bgra = vec![0u8; 4 * 4 * 4];
+        let scene = cpu_boot::Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (4, 4), [0.0, 0.0, 0.0, 1.0]).srgb_blend(true);
+        cpu_boot::paint(&scene, &mut cpu_boot::Target::new(&mut cpu_bgra, 4, 4), 1).unwrap();
+
+        for y in 0..4 {
+            let src_rgb = [src[y * 16], src[y * 16 + 1], src[y * 16 + 2]];
+            let want = expected(src_rgb, sat);
+            let off = y * 16;
+            let got_gpu = [gpu_bgra[off + 2], gpu_bgra[off + 1], gpu_bgra[off]];
+            let got_cpu = [cpu_bgra[off + 2], cpu_bgra[off + 1], cpu_bgra[off]];
+            for ch in 0..3 {
+                assert!(got_gpu[ch].abs_diff(want[ch]) <= 2, "sat={sat} row={y} ch={ch} gpu={got_gpu:?} want={want:?}");
+                assert!(got_cpu[ch].abs_diff(want[ch]) <= 2, "sat={sat} row={y} ch={ch} cpu={got_cpu:?} want={want:?}");
+                assert!(got_gpu[ch].abs_diff(got_cpu[ch]) <= 1, "sat={sat} row={y} gpu={got_gpu:?} cpu={got_cpu:?}");
+            }
+            if sat == 0.0 {
+                assert!(got_gpu[0].abs_diff(got_gpu[1]) <= 1 && got_gpu[1].abs_diff(got_gpu[2]) <= 1, "greyscale: {got_gpu:?}");
+            }
+        }
+    }
+    // Original Pixels source buffer is untouched (no CPU re-encode).
+    assert_eq!(px.rgba().as_slice(), src.as_slice());
+
+    // Single-image layer opacity folding must scale tint (`fill`) without corrupting saturation (`border[0]`).
+    let mut list = vec![
+        crate::render::Instance::begin_layer([0.0, 0.0, 4.0, 4.0], crate::render::NO_CLIP, crate::render::LayerSpec { opacity: 0.5, ..Default::default() }),
+        crate::render::Instance {
+            rect: [0.0, 0.0, 4.0, 4.0],
+            radii: [0.0; 4],
+            fill: [1.0, 1.0, 1.0, 1.0],
+            border: [-0.55, 0.0, 0.0, 0.0],
+            params: [0.0, crate::render::KIND_IMAGE, 0.0, 0.0],
+            uv: [0.0, 0.0, 1.0, 1.0],
+            clip: crate::render::NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+    let mut marks = Vec::new();
+    crate::render::end_layer(&mut list, &mut [], &mut marks, 0, 0);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].fill, [0.5, 0.5, 0.5, 0.5]);
+    assert_eq!(list[0].border[0], -0.55);
+}

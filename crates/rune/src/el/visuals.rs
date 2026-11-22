@@ -226,6 +226,23 @@ impl El {
         cold.pixels_fit = Some(fit);
         self
     }
+    /// Saturation filter for image elements ([`pixels`](Self::pixels), [`pixels_fit`](Self::pixels_fit)
+    /// and colour icons), like CSS `filter: saturate(amount)`: `0.0` is greyscale, `1.0` is
+    /// unchanged and values above `1.0` boost saturation. Negative values clamp to `0.0`; non-finite
+    /// values fall back to `1.0`. Applied in the shader with no CPU re-encode.
+    ///
+    /// ```
+    /// # use rune::{SurfaceFit, el};
+    /// # let cover = rune::Pixels::new();
+    /// let muted = el().pixels_fit(&cover, SurfaceFit::Fill).saturate(0.45);
+    /// ```
+    pub fn saturate(mut self, amount: f32) -> Self {
+        let s = if amount.is_finite() { amount.max(0.0) } else { 1.0 };
+        if s != 1.0 || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().saturation = s;
+        }
+        self
+    }
     /// A ring `offset` points outside the border box (CSS `outline` + `outline-offset`). Width
     /// and offset snap to device pixels as [`Self::border`]'s width does.
     pub fn outline(mut self, width: f32, offset: f32, color: Color) -> Self {

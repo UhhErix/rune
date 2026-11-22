@@ -177,7 +177,10 @@ pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
         if !d.iter().any(|(p, _)| p.starts_with("overflow")) { d.push(("overflow", "hidden".into())); }
     }
     if v.cold.backdrop_blur > 0.0 { d.push(("backdrop-filter", format!("blur({})", px(v.cold.backdrop_blur)))); }
-    if v.blur > 0.0 { d.push(("filter", format!("blur({})", px(v.blur)))); }
+    let mut filters = Vec::new();
+    if v.blur > 0.0 { filters.push(format!("blur({})", px(v.blur))); }
+    if (v.cold.saturation - 1.0).abs() > 1e-4 { filters.push(format!("saturate({})", num(v.cold.saturation))); }
+    if !filters.is_empty() { d.push(("filter", filters.join(" "))); }
 }
 
 /// A radial gradient's radii as percentages of the box, so it scales with the box between the
