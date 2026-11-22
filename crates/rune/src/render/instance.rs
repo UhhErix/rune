@@ -166,7 +166,8 @@ pub const KIND_SEGMENT: f32 = Kind::Segment.as_f32();
 /// mask (a→b, b→c, c→a as bits 0, 1, 2; other edges are hard so neighbours meet without seams).
 pub const KIND_TRIANGLE: f32 = Kind::Triangle.as_f32();
 /// An RGBA image (`El::pixels`): `uv.xy` its origin in the image atlas, `uv.zw` its size in
-/// texels, drawn scaled into `rect` with the element's corner `radii`; `fill.a` is the opacity.
+/// texels, drawn scaled into `rect` with the element's corner `radii`; `fill.a` is the opacity
+/// and `border.x` is `saturation - 1.0` (`0.0` leaves colour unchanged, `-1.0` is greyscale).
 pub const KIND_IMAGE: f32 = Kind::Image.as_f32();
 /// Balanced scope records in the painter stream. They occupy instance indices but are never
 /// rasterized as ordinary quads. Keep scopes intact when partitioning compositor lists.
@@ -764,10 +765,10 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
             let i = &mut instances[start + 1];
             if transfer_clip { i.clip = scope.clip; i.fade = scope.fade; }
             i.fill = i.fill.map(|v| v * opacity);
-            // A glyph's `border` holds no colour (an outline glyph's names its record).
+            // A glyph's and an image's `border` hold non-colour data (outline record / saturation delta).
             // A box's `params.w` is the opacity its colours carry (shader.wgsl `border_over`).
             match i.kind() {
-                Some(Kind::Glyph) => {}
+                Some(Kind::Glyph | Kind::Image) => {}
                 Some(Kind::Rect) => {
                     i.border = i.border.map(|v| v * opacity);
                     i.params[3] *= opacity;
@@ -778,7 +779,7 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
                     i.params[3] *= opacity;
                 }
                 Some(
-                    Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image
+                    Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle
                     | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial
                     | Kind::Effect | Kind::BackdropBlur,
                 ) | None => {
