@@ -678,7 +678,23 @@ impl El {
     /// let view = el().native_surface(&stream, SurfaceFit::Fill).surface_anchor(Align::Start, Align::Start);
     /// ```
     pub fn surface_anchor(mut self, horizontal: Align, vertical: Align) -> Self {
-        self.vis.cold_mut().surface_place.anchor = [horizontal, vertical];
+        self.vis.cold_mut().surface_place.anchor = crate::native_surface::place::SurfacePlace::align(horizontal, vertical).anchor;
+        self
+    }
+    /// Fractional anchor for a surface or [`pixels_fit`](Self::pixels_fit) image inside this node,
+    /// like CSS `object-position` (`(0.5, 0.22)` is `50% 22%`): `0.0` is start (left / top),
+    /// `0.5` is centre and `1.0` is end (right / bottom). Values are clamped to `0.0..=1.0`, and
+    /// non-finite values fall back to `0.5`. Applies to [`native_surface`](Self::native_surface),
+    /// [`video`](Self::video) and `pixels_fit`.
+    ///
+    /// ```
+    /// # use rune::{SurfaceFit, el};
+    /// # let cover = rune::Pixels::new();
+    /// // Show the upper portrait area of a tall cover art image (CSS `object-position: 50% 22%`).
+    /// let view = el().pixels_fit(&cover, SurfaceFit::Fill).surface_anchor_fraction(0.5, 0.22);
+    /// ```
+    pub fn surface_anchor_fraction(mut self, horizontal: f32, vertical: f32) -> Self {
+        self.vis.cold_mut().surface_place.anchor = crate::native_surface::place::SurfacePlace::fraction(horizontal, vertical).anchor;
         self
     }
     /// Draw a surface or `pixels_fit` image at one texel per device pixel instead of scaling it
