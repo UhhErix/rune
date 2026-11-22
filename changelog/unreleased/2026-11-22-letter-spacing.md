@@ -1,0 +1,1 @@
+- **`TextStyle::letter_spacing(em)` sets letter spacing in `em` of the font size.** Like CSS `letter-spacing`, positive values widen and negative values tighten glyph advances in shaping, line wrapping, measurement and caret placement, storing `em * size` points in `TextStyle::tracking`.
