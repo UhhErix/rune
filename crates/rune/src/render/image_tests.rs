@@ -259,3 +259,42 @@ fn gpu_pixels_fit_letterboxes_and_fill_crops() {
     }
     assert!(out.as_chunks::<4>().0.iter().all(|p| p[0] < 200), "red and white columns are cropped");
 }
+
+#[test]
+fn gpu_pixels_fit_fractional_anchor_crops_at_object_position() {
+    use crate::el::{El, el};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::runtime::{Cx, Env, Runtime};
+    type State = (Pixels, f32);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        el().size(4.0, 2.0).pixels_fit(&s.0, crate::SurfaceFit::Fill).surface_anchor_fraction(0.5, s.1)
+    }
+    // Four distinct horizontal bands (4x4): red, green, blue, white.
+    let px = Pixels::new();
+    let bands = [[255u8, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]];
+    let rgba: Vec<u8> = bands.iter().flat_map(|c| c.repeat(4)).collect();
+    px.set(4, 4, rgba);
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 4, 2);
+    let mut draw = |anchor_y| {
+        let mut rt = Runtime::new((px.clone(), anchor_y), view, (4.0, 2.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 2));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        gpu.queue.submit([enc.finish()]);
+        target.read(&gpu.device)
+    };
+    let row = |out: &[u8], y: usize| <[u8; 4]>::try_from(&out[(y * 4) * 4..(y * 4 + 1) * 4]).unwrap();
+    // 0.0 -> rows 0..2 (red, green); 0.5 -> rows 1..3 (green, blue); 1.0 -> rows 2..4 (blue, white).
+    let top = draw(0.0);
+    assert_eq!([row(&top, 0), row(&top, 1)], [bands[0], bands[1]]);
+    let mid = draw(0.5);
+    assert_eq!([row(&mid, 0), row(&mid, 1)], [bands[1], bands[2]]);
+    let bot = draw(1.0);
+    assert_eq!([row(&bot, 0), row(&bot, 1)], [bands[2], bands[3]]);
+}
+

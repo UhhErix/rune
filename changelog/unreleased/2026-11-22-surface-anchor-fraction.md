@@ -1,0 +1,1 @@
+- **`El::surface_anchor_fraction(x, y)` anchors `pixels_fit` images, video and native surfaces at fractional coordinates like CSS `object-position`.** `0.0` is start (left/top), `0.5` is centre and `1.0` is end (right/bottom), clamped to `0.0..=1.0`; `El::surface_anchor(Align, Align)` stays unchanged.
