@@ -108,6 +108,11 @@ impl TextStyle {
     pub const fn tracking(self, tracking: f32) -> TextStyle {
         TextStyle { tracking, ..self }
     }
+    /// Letter spacing in `em` of the font size (like CSS `letter-spacing`), stored in
+    /// [`Self::tracking`].
+    pub const fn letter_spacing(self, em: f32) -> TextStyle {
+        TextStyle { tracking: em * self.size, ..self }
+    }
     pub const fn variations(self, variations: &'static str) -> TextStyle {
         TextStyle { variations, ..self }
     }
