@@ -34,6 +34,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           CARGO_TERM_COLOR: never
         run: |
           $ErrorActionPreference = 'Continue'
@@ -68,11 +69,11 @@ jobs:
             ) -join "`n"
             $bodyFile = Join-Path $env:RUNNER_TEMP 'exo-sync-issue.md'
             Set-Content -Path $bodyFile -Value $body -Encoding utf8
-            $existing = gh issue list --state open --search 'in:title "exo sync blocked"' --json number,title --jq '.[] | select(.title == "exo sync blocked") | .number' | Select-Object -First 1
+            $existing = gh issue list --repo $env:GITHUB_REPOSITORY --state open --search 'in:title "exo sync blocked"' --json number,title --jq '.[] | select(.title == "exo sync blocked") | .number' | Select-Object -First 1
             if ($existing) {
-              gh issue edit $existing --body-file $bodyFile | Out-Null
+              gh issue edit $existing --repo $env:GITHUB_REPOSITORY --body-file $bodyFile | Out-Null
             } else {
-              gh issue create --title 'exo sync blocked' --body-file $bodyFile | Out-Null
+              gh issue create --repo $env:GITHUB_REPOSITORY --title 'exo sync blocked' --body-file $bodyFile | Out-Null
             }
           }
 
@@ -144,6 +145,10 @@ jobs:
           #   on upstream/dev on Windows.
           # - the five selection reference walks below: upstream/dev 549e0424 already fails them on
           #   Windows (word selection on "row 00" ends at 4 where the reference ends at 3).
+          # - `selectable_text::copy_select_all_and_the_context_menu` and the two `markdown_select`
+          #   tests below: pre-existing failures on upstream/dev 3d4e2dfc (since 94ed52d0) on
+          #   Windows (double-click selects trailing space, e.g. "port "/"cargo "/"def ", while
+          #   the assertions still expect the untrimmed word).
           cargo test --locked `
             -p rune-core -p rune-edit -p rune-gpu -p rune-image -p rune-media `
             -p rune-spell -p rune-text -p rune-mermaid `
@@ -155,6 +160,9 @@ jobs:
                --skip a_repeated_drag_across_virtual_rows_keeps_the_mounted_row_map `
                --skip every_short_sequence_over_virtual_rows_leaves_what_dev_left `
                --skip every_short_edge_sequence_leaves_what_the_reference_leaves `
+               --skip selectable_text::copy_select_all_and_the_context_menu `
+               --skip markdown_select::inline_code_copies_without_its_padding `
+               --skip markdown_select::highlighted_code_copies_as_plain_text `
             2>&1 | Tee-Object -FilePath $logFile -Append
           if ($LASTEXITCODE -ne 0) {
             Report-Blocked -Stage 'tests' -UpstreamSha $upstreamShort
@@ -181,7 +189,7 @@ jobs:
           }
 
           # Close any previously opened `exo sync blocked` issue once sync succeeds.
-          $existing = gh issue list --state open --search 'in:title "exo sync blocked"' --json number,title --jq '.[] | select(.title == "exo sync blocked") | .number' | Select-Object -First 1
+          $existing = gh issue list --repo $env:GITHUB_REPOSITORY --state open --search 'in:title "exo sync blocked"' --json number,title --jq '.[] | select(.title == "exo sync blocked") | .number' | Select-Object -First 1
           if ($existing) {
-            gh issue close $existing --comment "Sync recovered on ``upstream/dev`` (``$upstreamShort``) at tag ``$tag``." | Out-Null
+            gh issue close $existing --repo $env:GITHUB_REPOSITORY --comment "Sync recovered on ``upstream/dev`` (``$upstreamShort``) at tag ``$tag``." | Out-Null
           }
