@@ -39,7 +39,7 @@ use windows_sys::Win32::UI::Shell::{ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, AB
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::runtime::{DragHit, WindowMenu, drag_hit_at};
-use crate::titlebar::{Caption, CaptionButton, CaptionState};
+use crate::titlebar::{Caption, CaptionButton, CaptionState, CaptionStyle, Titlebar};
 
 const SUBCLASS: usize = 0x5255_4e46;
 const DRAG_SUBCLASS: usize = 0x5255_4e44;
@@ -56,6 +56,7 @@ struct State {
     height: Cell<f32>,
     /// Whether Rune draws and hit-tests the caption buttons (`Titlebar::controls`).
     controls: Cell<bool>,
+    style: Cell<CaptionStyle>,
     caption: Cell<CaptionState>,
     /// Windows' rect for the new scale while `WM_DPICHANGED` runs: winit's own `SetWindowPos`
     /// lands on it (`WM_WINDOWPOSCHANGING`), so the window moves and resizes once.
@@ -67,11 +68,12 @@ struct State {
 
 impl CustomFrame {
     /// Takes the title bar off `window`, keeping its client size.
-    pub(crate) fn install(window: &winit::window::Window, height: f32, controls: bool) -> Option<Self> {
+    pub(crate) fn install(window: &winit::window::Window, titlebar: Titlebar) -> Option<Self> {
         let hwnd = super::hwnd(window)?;
         let state = Rc::new(State {
-            height: Cell::new(height),
-            controls: Cell::new(controls),
+            height: Cell::new(titlebar.height()),
+            controls: Cell::new(titlebar.has_controls()),
+            style: Cell::new(titlebar.caption()),
             caption: Cell::new(CaptionState::Idle),
             dpi_rect: Cell::new(None),
             drag_hits: RefCell::new(Vec::new()),
@@ -101,13 +103,18 @@ impl CustomFrame {
     pub(crate) fn caption(&self, window: &winit::window::Window) -> Caption {
         match super::hwnd(window) {
             Some(hwnd) => self.state.caption(hwnd),
-            None => Caption { hidden: !self.state.controls.get(), ..Caption::new(self.state.height.get()) },
+            None => Caption {
+                hidden: !self.state.controls.get(),
+                ..Caption::with_style(self.state.height.get(), self.state.style.get())
+            },
         }
     }
 
-    /// A new titlebar height (`Cx::titlebar_height`): the buttons and the band they hit-test.
-    pub(crate) fn set_height(&self, height: f32) {
-        self.state.height.set(height);
+    /// A new titlebar (`Cx::set_titlebar`, `Cx::titlebar_height`): the buttons and the rects they hit-test.
+    pub(crate) fn set_titlebar(&self, titlebar: Titlebar) {
+        self.state.height.set(titlebar.height());
+        self.state.style.set(titlebar.caption());
+        self.set_controls(titlebar.has_controls());
     }
 
     /// Whether Rune draws and hit-tests the caption buttons (`Titlebar::controls`).
@@ -507,6 +514,7 @@ impl State {
         let (zoomed, style) = unsafe { (IsZoomed(hwnd) != 0, GetWindowLongPtrW(hwnd, GWL_STYLE) as u32) };
         Caption {
             height: self.height.get(),
+            style: self.style.get(),
             state: self.caption.get(),
             maximized: zoomed,
             minimizable: style & WS_MINIMIZEBOX != 0,

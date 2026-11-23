@@ -99,10 +99,7 @@ fn custom_frame(w: &Win) -> bool {
 fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar::Caption> {
     #[cfg(target_os = "windows")]
     return w.native.frame.as_ref().map(|f| {
-        if let Some(t) = titlebar {
-            f.set_height(t.height());
-            f.set_controls(t.has_controls());
-        }
+        if let Some(t) = titlebar { f.set_titlebar(t); }
         f.caption(&w.window)
     });
     #[cfg(not(target_os = "windows"))]

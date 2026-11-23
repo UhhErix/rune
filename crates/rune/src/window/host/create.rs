@@ -84,7 +84,7 @@ impl Host {
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t))
-            .and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height(), t.has_controls()));
+            .and_then(|t| crate::platform::win32::CustomFrame::install(&window, t));
         crate::marks::mark("window.frame_installed");
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();

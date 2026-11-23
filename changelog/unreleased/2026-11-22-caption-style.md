@@ -1,0 +1,1 @@
+- `Titlebar::caption_style` and `CaptionStyle` let Windows apps style the custom titlebar's caption buttons (size, insets, gap, corner radius, hover and press fills/colours, custom `CaptionGlyph` builder, or hidden glyphs while preserving native hit-testing and Snap Layouts).

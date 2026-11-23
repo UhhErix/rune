@@ -1,13 +1,13 @@
 //! The Windows caption buttons as elements, drawn as Electron's `titleBarOverlay` draws them
-//! (Chromium's Windows 11 icon painter): a 10 px symbol with a stroke of one device pixel,
-//! hover and press washes of the symbol colour, and a red close button.
+//! (Chromium's Windows 11 icon painter) by default, or with the geometry, fills and glyphs set
+//! by [`CaptionStyle`].
 
 use std::rc::Rc;
 
 use crate::el::{el, row};
 use crate::{Color, El, LineCap, Shape};
 
-use super::{Caption, CaptionButton, CaptionState, Titlebar};
+use super::{Caption, CaptionButton, CaptionGlyph, CaptionState, CaptionStyle};
 
 /// The close button's hover fill, Windows' own red.
 const CLOSE_RED: Color = Color { r: 0.807_5, g: 0.005_8, b: 0.016_9, a: 1.0 };
@@ -20,10 +20,31 @@ const CLOSE_PRESSED_ALPHA: f32 = 0x98 as f32 / 255.0;
 /// disabled text.
 const DISABLED_ALPHA: f32 = 0x5C as f32 / 255.0;
 
-/// A button's width and height in points at `scale`, each a whole number of pixels.
-pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
+/// Pixel-snapped caption button geometry in window points at `scale`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Layout {
+    pub w: f32,
+    pub h: f32,
+    pub gap: f32,
+    pub trailing: f32,
+    pub top: f32,
+}
+
+/// Each button's size, gap and insets in window points at `scale`, snapped to whole device pixels.
+pub(super) fn layout(height: f32, style: CaptionStyle, scale: f32) -> Layout {
     let snap = |pt: f32| (pt * scale).round().max(1.0) / scale;
-    (snap(Titlebar::CAPTION_BUTTON_WIDTH), snap(height))
+    let snap_zero = |pt: f32| if pt > 0.0 { (pt * scale).round() / scale } else { 0.0 };
+    let w = snap(style.button_width.max(1.0));
+    let band_h = snap(height.max(1.0));
+    let h = style.button_height.map_or(band_h, |bh| snap(bh.max(1.0)));
+    let gap = snap_zero(style.gap);
+    let trailing = snap_zero(style.trailing_inset);
+    let top = match style.top_inset {
+        Some(t) => snap_zero(t),
+        None if style.button_height.is_some() => snap_zero(((band_h - h) / 2.0).max(0.0)),
+        None => 0.0,
+    };
+    Layout { w, h, gap, trailing, top }
 }
 
 /// The view's root under the caption buttons, in a frame of Rune's own the window's size: the
@@ -48,38 +69,50 @@ pub(crate) const BUTTONS_KEY: &str = "rune-caption";
 fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
     // Sized in window points at the window's scale, then drawn in the view's points.
     let window = scale / zoom;
-    let (w, h) = size(caption.height, window);
-    let (w, h) = (w / zoom, h / zoom);
+    let lay = layout(caption.height, caption.style, window);
+    let (w, h) = (lay.w / zoom, lay.h / zoom);
+    let (gap, trailing, top) = (lay.gap / zoom, lay.trailing / zoom, lay.top / zoom);
     // Mirrored, the row sits at the top-left with Close first (`Caption::rects`).
-    let (left, right) = if caption.mirrored { (Some(0.0), None) } else { (None, Some(0.0)) };
-    let buttons: Vec<El> = caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window))).collect();
+    let (left, right) = if caption.mirrored { (Some(trailing), None) } else { (None, Some(trailing)) };
+    let buttons: Vec<El> = caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window), zoom)).collect();
     let buttons = if caption.mirrored { buttons.into_iter().rev().collect() } else { buttons };
-    row().key(BUTTONS_KEY).dir(crate::Direction::Ltr).pin(left, Some(0.0), right, None).children(buttons)
+    let mut strip = row().key(BUTTONS_KEY).dir(crate::Direction::Ltr).pin(left, Some(top), right, None);
+    if gap > 0.0 {
+        strip = strip.gap(gap);
+    }
+    strip.children(buttons)
 }
 
-fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scales: (f32, f32)) -> El {
+fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scales: (f32, f32), zoom: f32) -> El {
+    let style = caption.style;
     let enabled = caption.enabled(button);
     let (hovered, pressed) = match caption.state {
         CaptionState::Pressed { button: b, over: true } if b == button => (true, true),
         CaptionState::Hovered(b) if b == button => (true, false),
         _ => (false, false),
     };
-    let (fill, ink) = match button {
-        _ if !enabled => (Color::TRANSPARENT, symbol.alpha(symbol.a * DISABLED_ALPHA)),
-        CaptionButton::Close if pressed => (CLOSE_RED.alpha(CLOSE_PRESSED_ALPHA), Color::WHITE),
-        CaptionButton::Close if hovered => (CLOSE_RED, Color::WHITE),
-        _ if pressed => (symbol.alpha(symbol.a * PRESSED_ALPHA), symbol),
-        _ if hovered => (symbol.alpha(symbol.a * HOVER_ALPHA), symbol),
-        _ => (Color::TRANSPARENT, symbol),
+    let (fill, ink) = if style.hide_glyphs {
+        (Color::TRANSPARENT, Color::TRANSPARENT)
+    } else {
+        resolve_colors(style, button, symbol, enabled, hovered, pressed)
     };
-    let (key, label) = match button {
-        CaptionButton::Minimize => ("rune-caption-minimize", "Minimize"),
-        CaptionButton::Maximize if caption.maximized => ("rune-caption-maximize", "Restore"),
-        CaptionButton::Maximize => ("rune-caption-maximize", "Maximize"),
-        CaptionButton::Close => ("rune-caption-close", "Close"),
+    let (key, label, glyph_kind) = match button {
+        CaptionButton::Minimize => ("rune-caption-minimize", "Minimize", CaptionGlyph::Minimize),
+        CaptionButton::Maximize if caption.maximized => ("rune-caption-maximize", "Restore", CaptionGlyph::Restore),
+        CaptionButton::Maximize => ("rune-caption-maximize", "Maximize", CaptionGlyph::Maximize),
+        CaptionButton::Close => ("rune-caption-close", "Close", CaptionGlyph::Close),
     };
-    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill)
-        .child(symbol_el(button, caption.maximized, ink, (w, h), scales));
+    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill);
+    if style.radius > 0.0 {
+        e = e.radius(style.radius / zoom);
+    }
+    if !style.hide_glyphs {
+        if let Some(draw) = style.glyph {
+            e = e.center().child(draw(glyph_kind, ink).a11y_hidden());
+        } else {
+            e = e.child(symbol_el(button, caption.maximized, ink, (w, h), scales));
+        }
+    }
     // The mouse presses them through the window procedure; assistive technology invokes these.
     // A dimmed button has nothing to invoke.
     if enabled {
@@ -90,6 +123,38 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         }));
     }
     e
+}
+
+fn resolve_colors(style: CaptionStyle, button: CaptionButton, symbol: Color, enabled: bool, hovered: bool, pressed: bool) -> (Color, Color) {
+    if !enabled {
+        return (Color::TRANSPARENT, symbol.alpha(symbol.a * DISABLED_ALPHA));
+    }
+    match button {
+        CaptionButton::Close if pressed => {
+            let fill = style.close_press_fill.unwrap_or_else(|| {
+                let base = style.close_hover_fill.unwrap_or(CLOSE_RED);
+                base.alpha(base.a * CLOSE_PRESSED_ALPHA)
+            });
+            let ink = style.close_press_symbol.or(style.close_hover_symbol).unwrap_or(Color::WHITE);
+            (fill, ink)
+        }
+        CaptionButton::Close if hovered => {
+            let fill = style.close_hover_fill.unwrap_or(CLOSE_RED);
+            let ink = style.close_hover_symbol.unwrap_or(Color::WHITE);
+            (fill, ink)
+        }
+        _ if pressed => {
+            let fill = style.press_fill.unwrap_or_else(|| symbol.alpha(symbol.a * PRESSED_ALPHA));
+            let ink = style.press_symbol.or(style.hover_symbol).unwrap_or(symbol);
+            (fill, ink)
+        }
+        _ if hovered => {
+            let fill = style.hover_fill.unwrap_or_else(|| symbol.alpha(symbol.a * HOVER_ALPHA));
+            let ink = style.hover_symbol.unwrap_or(symbol);
+            (fill, ink)
+        }
+        _ => (Color::TRANSPARENT, symbol),
+    }
 }
 
 /// The symbol, laid out in device pixels so its strokes land on whole pixels: `scale` is device

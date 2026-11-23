@@ -183,7 +183,8 @@ impl Measurement<'_> {
         // to the new one, at launch and on every zoom step.
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
         let hidden = caption.hidden || cx.titlebar.titlebar.is_some_and(|t| !t.has_controls());
-        let caption = crate::titlebar::Caption { height, hidden, ..*caption };
+        let style = cx.titlebar.titlebar.map_or(caption.style, |t| t.caption());
+        let caption = crate::titlebar::Caption { height, style, hidden, ..*caption };
         (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
     }
 
