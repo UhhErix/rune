@@ -48,7 +48,7 @@ impl CommitState {
             return false;
         }
         for (path, v) in &self.virtuals {
-            if !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
+            if v.horizontal || !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
                 return false;
             }
             let Some(&list_id) = tree.path_ids.get(path) else { return false };

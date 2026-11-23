@@ -87,12 +87,12 @@ impl CommitState {
             let (r_new, r_old) = (&nodes[span.new_start], &tree.nodes[span.old_start]);
             if !scene.contains(r_new.id) || matches!(scene.phase(r_new.id), Some(PresencePhase::Exiting { .. })) { continue; }
             let mut scene_rect = r_new.local;
-            if !self.virtuals.is_empty() && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)) { scene_rect.y -= v.before; }
+            if !self.virtuals.is_empty() && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)) && !v.horizontal { scene_rect.y -= v.before; }
             let parent_top_clean = r_new.in_row != RowLayout::Snaps
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if !self.virtuals.is_empty() && let Some(v) = self.virtuals.get(&nodes[p].path) { sr.y -= v.before; }
+                        if !self.virtuals.is_empty() && let Some(v) = self.virtuals.get(&nodes[p].path) && !v.horizontal { sr.y -= v.before; }
                         scene.get(first_sib.id, prop::FRAME) == Some(sr)
                     })
                 });
@@ -218,7 +218,7 @@ pub(in crate::runtime) fn same_visual(a: &Visual, b: &Visual) -> bool {
 fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
-        animated_changes, option_as_alt, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
+        animated_changes, option_as_alt, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_horizontal, virtual_rows,
         virtual_rows_version, virtual_rows_append_only, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
         expanded_memo: _,
         #[cfg(debug_assertions)]
@@ -250,6 +250,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.scroll_edges == *scroll_edges
         && opt_box_eq(&a.growth, growth)
         && a.virtual_estimate == *virtual_estimate
+        && a.virtual_horizontal == *virtual_horizontal
         && opt_rc_eq(&a.virtual_rows, virtual_rows)
         && a.virtual_rows_version == *virtual_rows_version
         && a.virtual_rows_append_only == *virtual_rows_append_only
