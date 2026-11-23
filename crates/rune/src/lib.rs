@@ -363,6 +363,8 @@ pub use text::TextCase;
 pub use text::TextHighlight;
 pub use theme::Theme;
 pub use time::LocalTime;
+pub use titlebar::CaptionGlyph;
+pub use titlebar::CaptionStyle;
 pub use titlebar::ChromeInsets;
 pub use titlebar::Titlebar;
 pub use tok::Family;

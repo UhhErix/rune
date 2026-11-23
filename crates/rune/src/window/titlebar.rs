@@ -7,11 +7,207 @@
 //! as elements over the view. The app keeps clear of [`ChromeInsets`] and marks the parts
 //! that move the window with `.window_drag()`; hit targets inside them keep their presses.
 
-use crate::Chrome;
+use crate::{Chrome, Color, El};
 
 mod caption;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
+
+/// Which glyph a Windows caption button draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptionGlyph {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// Visual and layout styling for the Windows caption buttons drawn over a custom
+/// [`Titlebar`] (`Titlebar::caption_style`).
+///
+/// Any field left unset keeps Windows 11's defaults: 46 pt wide, full titlebar height, square
+/// corners, 10 px one-device-pixel symbols, translucent washes on hover and press, and Windows'
+/// red on close. Hit-testing (`HTMINBUTTON`, `HTMAXBUTTON` for Snap Layouts, `HTCLOSE`),
+/// accessibility invoke actions, right-to-left mirroring and zoom invariance all follow the
+/// configured geometry.
+#[derive(Clone, Copy, Debug)]
+pub struct CaptionStyle {
+    pub(super) button_width: f32,
+    pub(super) button_height: Option<f32>,
+    pub(super) gap: f32,
+    pub(super) trailing_inset: f32,
+    pub(super) top_inset: Option<f32>,
+    pub(super) radius: f32,
+    pub(super) hover_fill: Option<Color>,
+    pub(super) press_fill: Option<Color>,
+    pub(super) hover_symbol: Option<Color>,
+    pub(super) press_symbol: Option<Color>,
+    pub(super) close_hover_fill: Option<Color>,
+    pub(super) close_press_fill: Option<Color>,
+    pub(super) close_hover_symbol: Option<Color>,
+    pub(super) close_press_symbol: Option<Color>,
+    pub(super) glyph: Option<fn(CaptionGlyph, Color) -> El>,
+    pub(super) hide_glyphs: bool,
+}
+
+impl CaptionStyle {
+    /// Windows 11's default caption button geometry and styling.
+    pub const fn new() -> Self {
+        Self {
+            button_width: Titlebar::CAPTION_BUTTON_WIDTH,
+            button_height: None,
+            gap: 0.0,
+            trailing_inset: 0.0,
+            top_inset: None,
+            radius: 0.0,
+            hover_fill: None,
+            press_fill: None,
+            hover_symbol: None,
+            press_symbol: None,
+            close_hover_fill: None,
+            close_press_fill: None,
+            close_hover_symbol: None,
+            close_press_symbol: None,
+            glyph: None,
+            hide_glyphs: false,
+        }
+    }
+
+    /// Width of each caption button in window points. Defaults to [`Titlebar::CAPTION_BUTTON_WIDTH`] (46).
+    pub const fn button_width(mut self, points: f32) -> Self {
+        self.button_width = points;
+        self
+    }
+
+    /// Height of each caption button in window points. When unset, buttons fill the titlebar band.
+    pub const fn button_height(mut self, points: f32) -> Self {
+        self.button_height = Some(points);
+        self
+    }
+
+    /// Horizontal gap between adjacent caption buttons in window points. Defaults to 0.
+    pub const fn gap(mut self, points: f32) -> Self {
+        self.gap = points;
+        self
+    }
+
+    /// Inset from the window's trailing edge (leading edge in RTL) in window points. Defaults to 0.
+    pub const fn trailing_inset(mut self, points: f32) -> Self {
+        self.trailing_inset = points;
+        self
+    }
+
+    /// Inset from the window's top edge in window points. When unset and [`Self::button_height`]
+    /// is set, buttons are centred vertically inside the titlebar band; otherwise 0.
+    pub const fn top_inset(mut self, points: f32) -> Self {
+        self.top_inset = Some(points);
+        self
+    }
+
+    /// Corner radius of each caption button's hover and press fill in window points. Defaults to 0.
+    pub const fn radius(mut self, points: f32) -> Self {
+        self.radius = points;
+        self
+    }
+
+    /// Background fill for minimize and maximize/restore while hovered.
+    pub const fn hover_fill(mut self, color: Color) -> Self {
+        self.hover_fill = Some(color);
+        self
+    }
+
+    /// Background fill for minimize and maximize/restore while pressed.
+    pub const fn press_fill(mut self, color: Color) -> Self {
+        self.press_fill = Some(color);
+        self
+    }
+
+    /// Symbol colour for minimize and maximize/restore while hovered.
+    pub const fn hover_symbol(mut self, color: Color) -> Self {
+        self.hover_symbol = Some(color);
+        self
+    }
+
+    /// Symbol colour for minimize and maximize/restore while pressed. Falls back to
+    /// [`Self::hover_symbol`] when unset.
+    pub const fn press_symbol(mut self, color: Color) -> Self {
+        self.press_symbol = Some(color);
+        self
+    }
+
+    /// Background fill for the close button while hovered. Defaults to Windows' red.
+    pub const fn close_hover_fill(mut self, color: Color) -> Self {
+        self.close_hover_fill = Some(color);
+        self
+    }
+
+    /// Background fill for the close button while pressed.
+    pub const fn close_press_fill(mut self, color: Color) -> Self {
+        self.close_press_fill = Some(color);
+        self
+    }
+
+    /// Symbol colour for the close button while hovered. Defaults to white.
+    pub const fn close_hover_symbol(mut self, color: Color) -> Self {
+        self.close_hover_symbol = Some(color);
+        self
+    }
+
+    /// Symbol colour for the close button while pressed. Falls back to [`Self::close_hover_symbol`].
+    pub const fn close_press_symbol(mut self, color: Color) -> Self {
+        self.close_press_symbol = Some(color);
+        self
+    }
+
+    /// App-drawn glyph builder, centred inside each caption button in place of Rune's default
+    /// Windows 11 10 px symbols. Receives the resolved symbol colour for the button's current
+    /// rest, hover, press or disabled state.
+    pub const fn glyph(mut self, draw: fn(CaptionGlyph, Color) -> El) -> Self {
+        self.glyph = Some(draw);
+        self
+    }
+
+    /// When `true`, Rune skips painting caption button fills and glyphs while keeping the
+    /// non-client hit-test rectangles (`HTMINBUTTON`, `HTMAXBUTTON`, `HTCLOSE`) and accessibility
+    /// buttons, so the app can draw its own controls underneath.
+    pub const fn hide_glyphs(mut self, hide: bool) -> Self {
+        self.hide_glyphs = hide;
+        self
+    }
+}
+
+impl Default for CaptionStyle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for CaptionStyle {
+    fn eq(&self, other: &Self) -> bool {
+        self.button_width == other.button_width
+            && self.button_height == other.button_height
+            && self.gap == other.gap
+            && self.trailing_inset == other.trailing_inset
+            && self.top_inset == other.top_inset
+            && self.radius == other.radius
+            && self.hover_fill == other.hover_fill
+            && self.press_fill == other.press_fill
+            && self.hover_symbol == other.hover_symbol
+            && self.press_symbol == other.press_symbol
+            && self.close_hover_fill == other.close_hover_fill
+            && self.close_press_fill == other.close_press_fill
+            && self.close_hover_symbol == other.close_hover_symbol
+            && self.close_press_symbol == other.close_press_symbol
+            && match (self.glyph, other.glyph) {
+                (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.hide_glyphs == other.hide_glyphs
+    }
+}
 
 /// The app draws its own titlebar across the top of the window, `height` points tall
 /// (`App::titlebar`, `WindowSpec::titlebar`). Plain data, the same on every platform:
@@ -22,7 +218,8 @@ pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 /// - **Windows:** no native title bar. The window keeps its resize edges, Aero Snap, the snap
 ///   layouts flyout over maximize (Windows 11), the window menu (Alt+Space, or a right-click on
 ///   a `.window_drag()` region) and its animations; Rune draws the three caption buttons over
-///   the trailing edge at the band's height, as Electron's `titleBarOverlay` does.
+///   the trailing edge at the band's height (or as styled by [`Titlebar::caption_style`]), as
+///   Electron's `titleBarOverlay` does.
 /// - **Elsewhere:** the native frame stays and [`ChromeInsets`] is zero.
 ///
 /// `Cx::titlebar_height` changes the height while the app runs, as a UI zoom does, and
@@ -32,6 +229,7 @@ pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 pub struct Titlebar {
     height: f32,
     traffic_lights: Option<(f32, f32)>,
+    caption: CaptionStyle,
 }
 
 impl Titlebar {
@@ -39,7 +237,7 @@ impl Titlebar {
     pub const CAPTION_BUTTON_WIDTH: f32 = 46.0;
 
     pub const fn new(height: f32) -> Self {
-        Self { height, traffic_lights: None }
+        Self { height, traffic_lights: None, caption: CaptionStyle::new() }
     }
 
     /// macOS: the close button's top-left, in points from the window's top-left, for this
@@ -50,6 +248,13 @@ impl Titlebar {
         self
     }
 
+    /// Windows: visual and layout styling for the caption buttons (size, insets, corner radius,
+    /// hover and press fills, custom glyphs or hidden chrome). Ignored elsewhere.
+    pub const fn caption_style(mut self, style: CaptionStyle) -> Self {
+        self.caption = style;
+        self
+    }
+
     pub fn height(&self) -> f32 {
         self.height
     }
@@ -57,6 +262,11 @@ impl Titlebar {
     /// Where [`Self::traffic_lights`] put the close button, if it did.
     pub fn traffic_lights_origin(&self) -> Option<(f32, f32)> {
         self.traffic_lights
+    }
+
+    /// The Windows caption button style set by [`Self::caption_style`], or Windows 11 defaults.
+    pub fn caption(&self) -> CaptionStyle {
+        self.caption
     }
 
     /// The frame macOS draws for this titlebar over `chrome`: full-size content, drag regions
@@ -193,6 +403,7 @@ pub(crate) enum CaptionState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Caption {
     pub height: f32,
+    pub style: CaptionStyle,
     pub state: CaptionState,
     pub maximized: bool,
     /// The window has a minimize box (`WS_MINIMIZEBOX`); without one, the button is dimmed.
@@ -209,8 +420,22 @@ pub(crate) struct Caption {
 }
 
 impl Caption {
+    #[cfg(test)]
     pub(crate) fn new(height: f32) -> Self {
-        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl() }
+        Self::with_style(height, CaptionStyle::new())
+    }
+
+    pub(crate) fn with_style(height: f32, style: CaptionStyle) -> Self {
+        Self {
+            height,
+            style,
+            state: CaptionState::Idle,
+            maximized: false,
+            minimizable: true,
+            maximizable: true,
+            hidden: false,
+            mirrored: crate::labels::rtl(),
+        }
     }
 
     /// The buttons drawn, left to right. A window that can neither minimize nor maximize shows
@@ -233,14 +458,19 @@ impl Caption {
     }
 
     /// The buttons' rects, in [`Caption::buttons`]' order, in points from the window's top-left for
-    /// a window `width` points wide at `scale`: each a whole number of pixels, flush with the right
-    /// edge, or the left one mirrored (Close leftmost).
+    /// a window `width` points wide at `scale`: each a whole number of pixels, inset from the
+    /// trailing edge (or leading edge when mirrored, Close leftmost) by `style.trailing_inset`.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn rects(&self, width: f32, scale: f32) -> impl Iterator<Item = (CaptionButton, [f32; 4])> + use<> {
-        let (w, h) = caption::size(self.height, scale);
+        let lay = caption::layout(self.height, self.style, scale);
         let buttons = self.buttons();
         let (n, mirrored) = (buttons.len(), self.mirrored);
-        buttons.iter().enumerate().map(move |(i, &b)| (b, [if mirrored { w * (n - 1 - i) as f32 } else { width - w * (n - i) as f32 }, 0.0, w, h]))
+        let step = lay.w + lay.gap;
+        buttons.iter().enumerate().map(move |(i, &b)| {
+            let from_edge = lay.trailing + (n - 1 - i) as f32 * step;
+            let x = if mirrored { from_edge } else { width - from_edge - lay.w };
+            (b, [x, lay.top, lay.w, lay.h])
+        })
     }
 
     /// The enabled button at (x, y), in points from the window's top-left, in a window `width`
@@ -253,8 +483,14 @@ impl Caption {
             .filter(|&b| self.enabled(b))
     }
 
-    /// Points the buttons take from their edge at `scale`: the right, or the left mirrored.
+    /// Points the buttons take from their edge at `scale` (including `style.trailing_inset` and
+    /// any gaps between buttons): the right, or the left mirrored.
     pub(crate) fn width(&self, scale: f32) -> f32 {
-        caption::size(self.height, scale).0 * self.buttons().len() as f32
+        let n = self.buttons().len();
+        if n == 0 {
+            return 0.0;
+        }
+        let lay = caption::layout(self.height, self.style, scale);
+        lay.trailing + lay.w * n as f32 + lay.gap * (n - 1) as f32
     }
 }

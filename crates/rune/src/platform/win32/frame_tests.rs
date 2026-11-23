@@ -1,7 +1,7 @@
 use windows_sys::Win32::Foundation::{POINT, RECT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT, HTTOPRIGHT};
 
-use crate::titlebar::{Caption, CaptionButton, CaptionState};
+use crate::titlebar::{Caption, CaptionButton};
 
 use crate::runtime::DragHit;
 
@@ -11,7 +11,7 @@ use super::{
 };
 
 fn caption() -> Caption {
-    Caption { height: 36.0, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: false }
+    Caption { mirrored: false, ..Caption::new(36.0) }
 }
 
 /// An 800 px wide restored window at 96 dpi with an 8 px top resize edge, the point in client pixels.
