@@ -84,6 +84,12 @@ impl TextEdit {
 
     pub fn set_revealed(&mut self, revealed: bool) { self.revealed = revealed; }
 
+    /// Flip whether a [`secure`](Self::secure) field shows plain characters, returning the new state.
+    pub fn toggle_revealed(&mut self) -> bool {
+        self.revealed = !self.revealed;
+        self.revealed
+    }
+
     #[doc(hidden)]
     pub fn is_single_line(&self) -> bool {
         match self.line_mode {
