@@ -168,6 +168,13 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Maximum `El::backdrop_blur` elements blurred in a single frame. Defaults to
+    /// `MAX_BACKDROP_BLURS` (4). Elements past the cap draw only their fill.
+    pub fn max_backdrop_blurs(mut self, max: usize) -> Self {
+        self.runtime.max_backdrop_blurs = max;
+        self
+    }
+
     /// How this app's windows rasterise and place glyphs (see [`crate::FontSmoothing`]):
     /// `On` by default on macOS and in a Mac's browser, `Off` elsewhere (CoreGraphics' pipeline
     /// without font smoothing's dilation, as `-webkit-font-smoothing: antialiased` draws).

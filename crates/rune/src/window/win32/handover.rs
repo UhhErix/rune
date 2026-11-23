@@ -276,6 +276,7 @@ impl Host {
         } else {
             let rt = self.app.rt_mut();
             renderer.set_fade_stops(rt.fade_stops());
+            renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
             renderer.draw(&mut enc, &view, rt.clear_color());
         }

@@ -377,6 +377,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (width, height), rt.clear_color())
             .srgb_blend(rt.srgb_blend())
             .fade_stops(rt.fade_stops())
+            .max_backdrop_blurs(rt.max_backdrop_blurs())
             .native_surfaces(!rt.surfaces.is_empty())
             .compositor(has_comp)
             .half_rounding(cpu.half)

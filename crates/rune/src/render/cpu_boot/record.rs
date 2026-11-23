@@ -77,6 +77,7 @@ impl Recording {
             atlas_resets: 0,
             half: super::HalfRounding::default(),
             fade_stops: [0.0; 2],
+            max_backdrop_blurs: crate::render::MAX_BACKDROP_BLURS,
         }
     }
 
