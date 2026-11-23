@@ -88,6 +88,8 @@ impl crate::cold::Empty for FocusSpec {
 pub(crate) struct ModalSpec {
     pub dismiss: Option<PressFn>,
     pub outside: bool,
+    /// [`El::modal_live`]: the keys whose nodes (and their subtrees) stay live while it's open.
+    pub live: Vec<String>,
 }
 
 impl El {
@@ -316,21 +318,44 @@ impl El {
     }
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: click_outside,
-            dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))) });
+        self.handlers.modal = Some(ModalSpec {
+            outside: click_outside,
+            dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))),
+            live: Vec::new(),
+        });
         self
     }
     /// [`El::modal`] whose dismissal gets the change's [`Tx`]: a dialog that closes at once
     /// (`tx.instant()`), say.
     pub fn modal_tx<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: click_outside,
-            dismiss: Some(Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx))) });
+        self.handlers.modal = Some(ModalSpec {
+            outside: click_outside,
+            dismiss: Some(Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx))),
+            live: Vec::new(),
+        });
         self
     }
     /// Trap focus and make the background inert while mounted, with no Escape or outside-click
     /// dismissal (as HTML's `<dialog closedby="none">`): the modal's own controls close it.
     pub fn modal_trap(mut self) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None });
+        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None, live: Vec::new() });
+        self
+    }
+    /// Keeps the nodes with these keys, and everything inside them, live while this modal is open
+    /// (call it after [`El::modal`] or [`El::modal_tx`]): a menu's bar stays hoverable, and its
+    /// presses land. Such a node gets the pointer, its cursor and its presses as it does with no
+    /// modal open. It stays outside the modal's scope for focus, keys and assistive technology:
+    /// Tab stays in the modal, and a press on the node is pointer-only. A press on it first
+    /// dismisses each open modal that dismisses on an outside press, innermost first, then
+    /// delivers the press, in the same frame. A nested modal keeps a node live only when it names
+    /// it too, so a dialog over a menu makes the bar inert again. With no modal open, or with
+    /// the default (no keys), nothing changes.
+    pub fn modal_live<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        if let Some(h) = self.handlers.get_mut_if_some()
+            && let Some(m) = &mut h.modal
+        {
+            m.live = keys.into_iter().map(Into::into).collect();
+        }
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
