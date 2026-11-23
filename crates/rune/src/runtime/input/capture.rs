@@ -59,6 +59,9 @@ pub(crate) struct Held {
     /// The `on_drag` handler that began this drag, kept so a cancel still reaches it if the
     /// element leaves the tree or stops dragging.
     pub(crate) drag_handler: Option<crate::el::DragFn>,
+    /// The open modals a press on a node live through the modal (`El::modal_live`) dismisses,
+    /// innermost first, when its release delivers it: a press that delivers on down dismissed then.
+    pub(crate) dismiss: Vec<String>,
 }
 
 impl std::fmt::Debug for Held {
@@ -78,6 +81,7 @@ impl std::fmt::Debug for Held {
             .field("pressed_on_down", &self.pressed_on_down)
             .field("touch", &self.touch)
             .field("drag_handler", &self.drag_handler.is_some())
+            .field("dismiss", &self.dismiss)
             .finish()
     }
 }
@@ -85,7 +89,7 @@ impl std::fmt::Debug for Held {
 impl Held {
     /// A press that just went down at `at`, inside its element and still.
     pub(crate) fn new(path: String, drag: Drag, button: PointerButton, at: (f32, f32), down_at: f64, second: bool, drag_out: Option<f32>) -> Self {
-        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false, drag_handler: None }
+        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false, drag_handler: None, dismiss: Vec::new() }
     }
 
     pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }
