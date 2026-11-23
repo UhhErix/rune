@@ -329,3 +329,68 @@ fn synthetic_app(dir: &std::path::Path) -> std::path::PathBuf {
     std::fs::write(resources.join("icon.icns"), icns).unwrap();
     app
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_capped_and_load_capped_downscale_oversized_rasters() {
+    let source = image::RgbImage::from_pixel(400, 200, image::Rgb([30, 60, 90]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    source.write_to(&mut encoded, image::ImageFormat::Png).unwrap();
+    let bytes = encoded.into_inner();
+    let dir = std::env::temp_dir().join(format!("rune-capped-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("wide.png");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let full = cache.file(&path, 100.0, 1.0);
+    let capped_file = cache.file_capped(&path, 100.0, 1.0);
+    let capped_mem = cache.load_capped(bytes, 50.0, 2.0);
+    assert_eq!(full.wait().unwrap(), [400, 200]);
+    assert_eq!(capped_file.wait().unwrap(), [100, 50]);
+    assert_eq!(capped_mem.wait().unwrap(), [100, 50]);
+    assert!(capped_file.decoded_bytes() > 0);
+    assert!(capped_file.decoded_bytes() < full.decoded_bytes() / 10);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn lru_budget_evicts_oldest_entries_and_evict_all_releases_offscreen() {
+    let cache = ImageCache::with_budget(Arc::new(|| {}), 60_000);
+    let img_a = cache.rgba(64, 64, vec![10; 64 * 64 * 4]);
+    let img_b = cache.rgba(64, 64, vec![20; 64 * 64 * 4]);
+    let bytes_each = img_a.decoded_bytes();
+    assert!(bytes_each > 20_000 && bytes_each < 25_000, "unexpected bytes_each: {bytes_each}");
+    assert_eq!(cache.retained_count(), 2);
+    assert_eq!(cache.retained_bytes(), bytes_each * 2);
+
+    // Touch A so B becomes the oldest entry.
+    cache.touch(&img_a);
+    let weak_a = Arc::downgrade(&img_a.0);
+    let weak_b = Arc::downgrade(&img_b.0);
+    drop(img_a);
+    drop(img_b);
+    assert!(weak_a.upgrade().is_some(), "retained inside budget");
+    assert!(weak_b.upgrade().is_some(), "retained inside budget");
+
+    // Inserting C exceeds 60 KB (3 * ~21.8 KB > 60 KB), so B (LRU) is evicted while A stays.
+    let img_c = cache.rgba(64, 64, vec![30; 64 * 64 * 4]);
+    let drawn_c = img_c.pixels().clone();
+    let weak_c = Arc::downgrade(&img_c.0);
+    drop(img_c);
+    assert!(cache.retained_bytes() <= 60_000);
+    assert!(weak_b.upgrade().is_none(), "B should be evicted as LRU");
+    assert!(weak_a.upgrade().is_some(), "A was touched and stays retained");
+    assert!(weak_c.upgrade().is_some(), "C is most recently used");
+
+    // evict_all drops cache retention: offscreen A frees immediately, drawn C stays via Pixels.
+    cache.evict_all();
+    assert_eq!(cache.retained_count(), 0);
+    assert_eq!(cache.retained_bytes(), 0);
+    assert!(weak_a.upgrade().is_none(), "offscreen A freed on evict_all");
+    assert!(weak_c.upgrade().is_some(), "drawn C stays alive through Pixels");
+    drop(drawn_c);
+    assert!(weak_c.upgrade().is_none(), "C freed once no longer drawn");
+}
+

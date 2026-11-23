@@ -57,6 +57,15 @@ pub(crate) struct Decoded {
     /// An animation's other frames and timing.
     pub motion: Option<Box<animated::Motion>>,
 }
+impl Decoded {
+    pub(crate) fn decoded_bytes(&self) -> usize {
+        let base: usize = self.mips.iter().map(|m| m.pixels.len()).sum();
+        let motion: usize = self.motion.as_ref().map_or(0, |m| {
+            m.frames.iter().flat_map(|f| f.iter()).map(|mip| mip.pixels.len()).sum()
+        });
+        base.saturating_add(motion)
+    }
+}
 struct State {
     id: ImageId,
     pixels: Pixels,
@@ -86,6 +95,11 @@ impl Image {
         let mip = self.decoded()?.ok()?.mips.first()?;
         Some([mip.width, mip.height])
     }
+    /// Exact decoded pixel bytes held by this image across all mip levels and animation frames,
+    /// or `0` while pending or on decode error.
+    pub fn decoded_bytes(&self) -> usize {
+        self.decoded().and_then(Result::ok).map_or(0, Decoded::decoded_bytes)
+    }
     pub fn is_ready(&self) -> bool { self.0.decoded.get().is_some() }
     pub fn error(&self) -> Option<&ImageError> { self.0.decoded.get()?.as_ref().err() }
     /// Wait for fixture assets before advancing a deterministic headless scene. Interactive
@@ -112,11 +126,14 @@ impl Image {
 
 enum Input {
     Encoded(Arc<[u8]>),
+    EncodedCapped(Arc<[u8]>, u32),
     Rgba(u32, u32, Arc<[u8]>),
     Icon(#[cfg_attr(target_arch = "wasm32", allow(dead_code))] std::path::PathBuf, #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32),
     Svg(Arc<[u8]>, u32),
     #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf, u32),
+    #[cfg(not(target_arch = "wasm32"))]
+    FileCapped(std::path::PathBuf, u32),
     /// `ImageCache::url`, and `ImageCache::file` on web.
     Url(String, u32),
     /// A decoder that panics, standing in for a codec bug.
@@ -130,6 +147,7 @@ impl Input {
     fn decode(self) -> Result<Decoded, ImageError> {
         match self {
             Input::Encoded(bytes) => decode(&bytes),
+            Input::EncodedCapped(bytes, px) => decode_capped(&bytes, px),
             Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
             Input::Svg(bytes, px) => svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
             #[cfg(not(target_arch = "wasm32"))]
@@ -141,6 +159,15 @@ impl Input {
                     svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes))
                 } else {
                     decode(&bytes)
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Input::FileCapped(path, px) => {
+                let bytes = std::fs::read(&path).map_err(|e| ImageError(format!("{}: {e}", path.display())))?;
+                if has_svg_extension(&path) || is_svg(&bytes) {
+                    svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes))
+                } else {
+                    decode_capped(&bytes, px)
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -171,7 +198,7 @@ impl Input {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-struct Job { image: Image, input: Input, waker: rune_core::Waker }
+struct Job { image: Image, input: Input, waker: rune_core::Waker, cache: Weak<Mutex<CacheInner>> }
 /// Decoder threads for the process, at most one per core.
 #[cfg(not(target_arch = "wasm32"))]
 const DECODERS: usize = 4;
@@ -224,15 +251,130 @@ fn decode_jobs() {
             job
         };
         job.image.finish(job.input.decode_caught());
+        if let Some(inner) = job.cache.upgrade() {
+            let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard.on_decoded(job.image.id(), &job.image);
+        }
         (job.waker)();
     }
 }
 
+struct RetainedEntry {
+    _state: Arc<State>,
+    bytes: usize,
+    last_used: u64,
+}
+
+struct CacheInner {
+    entries: HashMap<ImageId, Weak<State>>,
+    retained: HashMap<ImageId, RetainedEntry>,
+    retained_bytes: usize,
+    max_bytes: usize,
+    tick: u64,
+}
+
+impl CacheInner {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            retained: HashMap::new(),
+            retained_bytes: 0,
+            max_bytes,
+            tick: 0,
+        }
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick = self.tick.wrapping_add(1);
+        self.tick
+    }
+
+    fn retain_and_touch(&mut self, state: &Arc<State>) {
+        if self.max_bytes == 0 {
+            return;
+        }
+        if state.decoded.get().is_some_and(Result::is_err) {
+            return;
+        }
+        let bytes = state
+            .decoded
+            .get()
+            .and_then(|r| r.as_ref().ok())
+            .map_or(0, |d| d.decoded_bytes());
+        if bytes > self.max_bytes {
+            self.remove_retained(&state.id);
+            return;
+        }
+        let tick = self.next_tick();
+        if let Some(entry) = self.retained.get_mut(&state.id) {
+            self.retained_bytes = self.retained_bytes.saturating_sub(entry.bytes).saturating_add(bytes);
+            entry.bytes = bytes;
+            entry.last_used = tick;
+        } else {
+            self.retained_bytes = self.retained_bytes.saturating_add(bytes);
+            self.retained.insert(state.id, RetainedEntry { _state: Arc::clone(state), bytes, last_used: tick });
+        }
+        self.evict_to_budget(Some(state.id));
+    }
+
+    fn on_decoded(&mut self, id: ImageId, image: &Image) {
+        if self.max_bytes == 0 {
+            return;
+        }
+        if image.error().is_some() {
+            self.remove_retained(&id);
+            return;
+        }
+        let bytes = image.decoded_bytes();
+        if bytes > self.max_bytes {
+            self.remove_retained(&id);
+            return;
+        }
+        if let Some(entry) = self.retained.get_mut(&id) {
+            self.retained_bytes = self.retained_bytes.saturating_sub(entry.bytes).saturating_add(bytes);
+            entry.bytes = bytes;
+        }
+        self.evict_to_budget(None);
+    }
+
+    fn remove_retained(&mut self, id: &ImageId) {
+        if let Some(old) = self.retained.remove(id) {
+            self.retained_bytes = self.retained_bytes.saturating_sub(old.bytes);
+        }
+    }
+
+    fn evict_to_budget(&mut self, protect: Option<ImageId>) {
+        if self.max_bytes == 0 {
+            self.retained.clear();
+            self.retained_bytes = 0;
+            return;
+        }
+        while self.retained_bytes > self.max_bytes && !self.retained.is_empty() {
+            let victim = self
+                .retained
+                .iter()
+                .filter(|(id, _)| protect.is_none_or(|p| **id != p) || self.retained.len() == 1)
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(id, _)| *id);
+            let Some(id) = victim else { break };
+            self.remove_retained(&id);
+        }
+        self.entries.retain(|_, value| value.strong_count() > 0);
+    }
+
+    fn evict_all(&mut self) {
+        self.retained.clear();
+        self.retained_bytes = 0;
+        self.entries.retain(|_, value| value.strong_count() > 0);
+    }
+}
+
 /// Construct once during app setup. The cache deduplicates by content, not a path or pointer;
-/// dropping all handles releases decoded pixels. Its images decode on the process's decoder
+/// dropping all handles releases decoded pixels unless a byte budget retains recently used
+/// entries (see [`ImageCache::with_budget`]). Its images decode on the process's decoder
 /// threads, which every cache shares. The waker should be the one supplied by `AppSpec::setup`.
 pub struct ImageCache {
-    entries: Mutex<HashMap<ImageId, Weak<State>>>,
+    inner: Arc<Mutex<CacheInner>>,
     #[cfg(not(target_arch = "wasm32"))]
     waker: rune_core::Waker,
     #[cfg(target_arch = "wasm32")]
@@ -241,11 +383,58 @@ pub struct ImageCache {
 impl ImageCache {
     #[cfg(target_arch = "wasm32")]
     pub fn new(wake: rune_core::Waker) -> Self {
-        Self { entries: Mutex::new(HashMap::new()), wake }
+        Self::with_budget(wake, 0)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(waker: rune_core::Waker) -> Self {
-        Self { entries: Mutex::new(HashMap::new()), waker }
+        Self::with_budget(waker, 0)
+    }
+
+    /// Construct a cache that retains recently used decoded images up to `max_bytes` (evicting
+    /// least-recently-used entries once their decoded pixel bytes exceed `max_bytes`). Pass `0`
+    /// to disable strong retention (matching [`ImageCache::new`]).
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_budget(wake: rune_core::Waker, max_bytes: usize) -> Self {
+        Self { inner: Arc::new(Mutex::new(CacheInner::new(max_bytes))), wake }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_budget(waker: rune_core::Waker, max_bytes: usize) -> Self {
+        Self { inner: Arc::new(Mutex::new(CacheInner::new(max_bytes))), waker }
+    }
+
+    /// Update the decoded-byte LRU budget and immediately evict oldest entries past `max_bytes`.
+    pub fn set_budget(&self, max_bytes: usize) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.max_bytes = max_bytes;
+        inner.evict_to_budget(None);
+    }
+
+    /// Current LRU byte budget (`0` means no strong retention).
+    pub fn budget(&self) -> usize {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).max_bytes
+    }
+
+    /// Total decoded pixel bytes currently retained by the cache's LRU table.
+    pub fn retained_bytes(&self) -> usize {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).retained_bytes
+    }
+
+    /// Number of entries currently retained by the cache's LRU table.
+    pub fn retained_count(&self) -> usize {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).retained.len()
+    }
+
+    /// Mark `image` as most-recently-used in the cache's LRU table.
+    pub fn touch(&self, image: &Image) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.retain_and_touch(&image.0);
+    }
+
+    /// Release all strong handles held by the cache's LRU table. Images still drawn on screen
+    /// stay alive through their `Pixels`; off-screen images are freed immediately.
+    pub fn evict_all(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.evict_all();
     }
 
     /// PNG (APNG animates), JPEG, GIF and WebP (both animate), BMP, ICO, AVIF (with the `avif`
@@ -263,6 +452,19 @@ impl ImageCache {
         hash.update(&bytes);
         let id = *hash.finalize().as_bytes();
         self.request(id, Input::Encoded(bytes))
+    }
+
+    /// Like [`ImageCache::load`], but downscales raster images (including animation frames) on
+    /// the decoder worker so neither side exceeds `size_pt * scale` device pixels (up to 4096)
+    /// before building mip chains.
+    pub fn load_capped(&self, bytes: impl Into<Arc<[u8]>>, size_pt: f32, scale: f32) -> Image {
+        let bytes = bytes.into();
+        let px = cap_pixels(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-encoded-capped\0");
+        hash.update(&px.to_le_bytes());
+        hash.update(&bytes);
+        self.request(*hash.finalize().as_bytes(), Input::EncodedCapped(bytes, px))
     }
 
     /// SVG or SVGZ bytes rasterized to fit `size_pt` points square at `scale` device pixels per
@@ -303,6 +505,24 @@ impl ImageCache {
         let input = Input::Url(path.to_string_lossy().into_owned(), px);
         #[cfg(not(target_arch = "wasm32"))]
         let input = Input::File(path, px);
+        self.request(*hash.finalize().as_bytes(), input)
+    }
+
+    /// Like [`ImageCache::file`], but downscales raster files (including animation frames) on
+    /// the decoder worker so neither side exceeds `size_pt * scale` device pixels (up to 4096)
+    /// before building mip chains.
+    pub fn file_capped(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
+        let path = path.as_ref().to_path_buf();
+        let px = cap_pixels(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-file-capped\0");
+        hash.update(path.as_os_str().as_encoded_bytes());
+        hash.update(&[0]);
+        hash.update(&px.to_le_bytes());
+        #[cfg(target_arch = "wasm32")]
+        let input = Input::Url(path.to_string_lossy().into_owned(), px);
+        #[cfg(not(target_arch = "wasm32"))]
+        let input = Input::FileCapped(path, px);
         self.request(*hash.finalize().as_bytes(), input)
     }
 
@@ -348,17 +568,21 @@ impl ImageCache {
     }
 
     fn request_set(&self, id: ImageId, input: Input, srcset: Option<Arc<str>>) -> Image {
-        let mut entries = self.entries.lock().unwrap();
-        if let Some(state) = entries.get(&id).and_then(Weak::upgrade) { return Image::new(state); }
-        entries.retain(|_, value| value.strong_count() > 0);
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = inner.entries.get(&id).and_then(Weak::upgrade) {
+            inner.retain_and_touch(&state);
+            return Image::new(state);
+        }
+        inner.entries.retain(|_, value| value.strong_count() > 0);
         let url: Option<Arc<str>> = match &input {
             Input::Url(url, _) => Some(url.as_str().into()),
             #[cfg(not(target_arch = "wasm32"))]
-            Input::File(path, _) => Some(path.to_string_lossy().into()),
+            Input::File(path, _) | Input::FileCapped(path, _) => Some(path.to_string_lossy().into()),
             _ => None,
         };
         let image = Image::new(Arc::new(State { id, pixels: Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
-        entries.insert(id, Arc::downgrade(&image.0));
+        inner.entries.insert(id, Arc::downgrade(&image.0));
+        inner.retain_and_touch(&image.0);
         // A small straight RGBA image (a 16 pt tile at 2x) is ready at once: its mips take
         // microseconds, less than handing it to a decoder, and the view that asked for it draws it
         // in the same frame rather than a placeholder first. It still wakes the app once, as a
@@ -367,13 +591,20 @@ impl ImageCache {
         #[cfg(not(target_arch = "wasm32"))]
         if let Input::Rgba(w, h, _) = &input && u64::from(*w) * u64::from(*h) <= INLINE_RGBA_PIXELS {
             image.finish(input.decode_caught());
-            drop(entries);
+            inner.on_decoded(id, &image);
+            drop(inner);
             (self.waker)();
             return image;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !decode_later(Job { image: image.clone(), input, waker: self.waker.clone() }) {
+        if !decode_later(Job {
+            image: image.clone(),
+            input,
+            waker: self.waker.clone(),
+            cache: Arc::downgrade(&self.inner),
+        }) {
             image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
+            inner.remove_retained(&id);
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -382,6 +613,7 @@ impl ImageCache {
             // and one dropped while its bytes download is never decoded.
             let weak = Arc::downgrade(&image.0);
             let wake = self.wake.clone();
+            let cache_weak = Arc::downgrade(&self.inner);
             wasm_bindgen_futures::spawn_local(async move {
                 let decoded = match input {
                     Input::Url(url, px) => {
@@ -398,7 +630,12 @@ impl ImageCache {
                     input => input.decode(),
                 };
                 let Some(state) = weak.upgrade() else { return };
-                Image::new(state).finish(decoded);
+                let img = Image::new(state);
+                img.finish(decoded);
+                if let Some(inner) = cache_weak.upgrade() {
+                    let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.on_decoded(id, &img);
+                }
                 wake();
             });
         }
@@ -420,6 +657,21 @@ fn wanted(state: &std::sync::Weak<State>) -> bool { state.strong_count() > 0 }
 fn icon_pixels(size_pt: f32, scale: f32) -> u32 {
     let px = (size_pt * scale).ceil();
     if px.is_finite() { px.clamp(1.0, 1024.0) as u32 } else { 1 }
+}
+
+fn cap_pixels(size_pt: f32, scale: f32) -> u32 {
+    let px = (size_pt * scale).ceil();
+    if px.is_finite() { px.clamp(1.0, 4096.0) as u32 } else { 1 }
+}
+
+pub(crate) fn fit_within(w: u32, h: u32, max_side: u32) -> (u32, u32) {
+    if max_side == 0 || (w <= max_side && h <= max_side) {
+        return (w, h);
+    }
+    let scale = max_side as f64 / w.max(h) as f64;
+    let nw = ((w as f64 * scale).round() as u32).clamp(1, max_side);
+    let nh = ((h as f64 * scale).round() as u32).clamp(1, max_side);
+    (nw, nh)
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -631,16 +883,28 @@ pub fn svg_rgba_cover(_: &[u8], _: u32) -> Result<Vec<u8>, ImageError> {
 }
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
+    decode_capped(bytes, 0)
+}
+
+fn decode_capped(bytes: &[u8], max_side: u32) -> Result<Decoded, ImageError> {
     if is_svg(bytes) {
-        let (w, h, rgba) = svg_rgba(bytes, 0)?;
+        let (w, h, rgba) = svg_rgba(bytes, max_side)?;
         return mip_chain(w, h, &rgba);
     }
     if avif::is_avif(bytes) {
         let (w, h, rgba) = avif::rgba(bytes)?;
+        if max_side > 0 && (w > max_side || h > max_side) {
+            if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                let (nw, nh) = fit_within(w, h, max_side);
+                let resized = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+                return mip_chain(resized.width(), resized.height(), resized.as_raw());
+            }
+            return Err(ImageError("invalid AVIF buffer size".into()));
+        }
         return mip_chain(w, h, &rgba);
     }
     let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
-    if let Some(animation) = animated::decode(bytes) { return animation; }
+    if let Some(animation) = animated::decode_capped(bytes, max_side) { return animation; }
     use image::ImageDecoder;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -659,6 +923,12 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     let mut image = image::DynamicImage::from_decoder(decoder).map_err(error)?;
     image.apply_orientation(orientation);
     let image = image.into_rgba8();
+    let image = if max_side > 0 && (image.width() > max_side || image.height() > max_side) {
+        let (nw, nh) = fit_within(image.width(), image.height(), max_side);
+        image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Triangle)
+    } else {
+        image
+    };
     mip_chain(image.width(), image.height(), image.as_raw())
 }
 
