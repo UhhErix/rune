@@ -25,6 +25,18 @@ impl RuntimeCore {
         self.tree.fade_stops
     }
 
+    /// Sets the per-frame cap on `El::backdrop_blur` elements, as `App::max_backdrop_blurs`
+    /// does for a window (defaults to `MAX_BACKDROP_BLURS`).
+    pub fn set_max_backdrop_blurs(&mut self, max: usize) {
+        if self.paint.set_max_backdrop_blurs(max) {
+            self.commit.dirty = true;
+        }
+    }
+
+    pub fn max_backdrop_blurs(&self) -> usize {
+        self.paint.max_backdrop_blurs()
+    }
+
     /// Rasterise and place glyphs in `mode` from the next frame, as `App::font_smoothing` does
     /// for a window. Glyphs already rasterised in another mode stay cached for a switch back.
     /// Blending is separate: both modes match CoreText with [`Self::set_srgb_blend`] on.
