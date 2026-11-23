@@ -32,7 +32,26 @@ impl El {
     /// ```
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
-        self.cold_mut().virtual_estimate = Some(estimated_row_height.max(1.0));
+        let cold = self.cold_mut();
+        cold.virtual_estimate = Some(estimated_row_height.max(1.0));
+        cold.virtual_horizontal = false;
+        self.flags.set(ElFlags::HAS_VIRTUAL, true);
+        #[cfg(debug_assertions)]
+        { self.cold_mut().virtual_source = Some(std::panic::Location::caller()); }
+        self
+    }
+
+    /// Window keyed items of a horizontal strip inside a `.scroll_x()` or `.scroll_xy()`
+    /// viewport. Unvisited items use `estimated_col_width`; measured widths preserve the visible
+    /// horizontal anchor. Offscreen items have no layout, text or scene nodes.
+    ///
+    /// Prefer [`El::virtual_cols`] unless the strip is short so offscreen items are never built.
+    /// Unlike vertical [`El::virtualize`], horizontal strips do not need `.growth(...)`.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn virtualize_x(mut self, estimated_col_width: f32) -> Self {
+        let cold = self.cold_mut();
+        cold.virtual_estimate = Some(estimated_col_width.max(1.0));
+        cold.virtual_horizontal = true;
         self.flags.set(ElFlags::HAS_VIRTUAL, true);
         #[cfg(debug_assertions)]
         { self.cold_mut().virtual_source = Some(std::panic::Location::caller()); }
@@ -86,6 +105,48 @@ impl El {
     ) -> Self {
         self.cold_mut().virtual_rows = Some(Rc::new(RowSource::new(count, key, build)));
         self.virtualize(estimated_row_height)
+    }
+
+    /// [`El::virtualize_x`] with horizontal strip items built by index: `count` items, item `i`
+    /// keyed `key(s, i)` and built by `build(s, i)`. Layout calls `build` only for items in the
+    /// mounted horizontal window (the viewport and overscan on either side). Put this element
+    /// inside a `.scroll_x()` or `.scroll_xy()` viewport and give it no other children.
+    ///
+    /// ```ignore
+    /// row().scroll_x().w_full().h(160.0).child(
+    ///     row().key("shots").gap(12.0).virtual_cols(
+    ///         s.shots.len(),
+    ///         240.0,
+    ///         |s: &App, i| s.shots[i].id.as_str().into(),
+    ///         |s: &App, i| screenshot_tile(&s.shots[i]),
+    ///     ),
+    /// )
+    /// ```
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn virtual_cols<S: 'static>(
+        mut self,
+        count: usize,
+        estimated_col_width: f32,
+        key: impl for<'a> Fn(&'a S, usize) -> Cow<'a, str> + 'static,
+        build: impl Fn(&S, usize) -> El + 'static,
+    ) -> Self {
+        self.cold_mut().virtual_rows = Some(Rc::new(RowSource::new(count, key, build)));
+        self.virtualize_x(estimated_col_width)
+    }
+
+    /// Alias of [`El::virtual_rows_version`] for [`El::virtual_cols`].
+    pub fn virtual_cols_version(self, version: impl std::hash::Hash) -> Self {
+        self.virtual_rows_version(version)
+    }
+
+    /// Alias of [`El::on_visible_rows`] for [`El::virtualize_x`] / [`El::virtual_cols`]:
+    /// fires with the visible item index range `start..end` along the horizontal strip.
+    #[track_caller]
+    pub fn on_visible_cols<S: 'static>(
+        self,
+        f: impl Fn(&mut S, std::ops::Range<usize>) -> bool + 'static,
+    ) -> Self {
+        self.on_visible_rows(f)
     }
 
     /// Tells [`El::virtual_rows`] its keys are those of the last commit that gave the same
@@ -152,3 +213,7 @@ impl RowSource {
 #[cfg(test)]
 #[path = "virtual_rows_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "virtual_cols_tests.rs"]
+mod col_tests;

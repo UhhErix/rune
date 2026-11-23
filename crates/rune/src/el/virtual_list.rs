@@ -82,6 +82,8 @@ pub(crate) struct VirtualList {
     /// Rows are built by index (`El::virtual_rows`), so a commit costs only the rows it mounts.
     /// Such a list moves its window in small steps and spreads rows new to it over frames.
     pub indexed: bool,
+    /// True when windowing along the horizontal axis (`El::virtualize_x` / `El::virtual_cols`).
+    pub horizontal: bool,
     /// The rows the last applied commit mounted. Every measurement of a commit compares with
     /// these, not with the pass before it.
     pub shown: HashSet<String>,
@@ -149,12 +151,30 @@ pub(crate) fn height_bound(style: &CompactStyle, avail: f32) -> f32 {
     length(style.min_size().height).map_or(h, |m| h.max(m))
 }
 
+/// The most an element can be wide before layout, mirroring [`height_bound`] for horizontal strips.
+pub(crate) fn width_bound(style: &CompactStyle, avail: f32) -> f32 {
+    let w = style.size().width.into_option().unwrap_or(avail);
+    let w = length(style.max_size().width).map_or(w, |m| w.min(m));
+    length(style.min_size().width).map_or(w, |m| w.max(m))
+}
+
 /// A column flex container's vertical gap in points; zero for non-column containers.
 pub(crate) fn gap_y(style: &CompactStyle) -> f32 {
     let column = style.display() == Display::Flex && style.flex_wrap() == FlexWrap::NoWrap
         && matches!(style.flex_direction(), FlexDirection::Column | FlexDirection::ColumnReverse);
     if !column { return 0.0; }
     match style.gap().height.expand() {
+        taffy::style::ExpandedLengthPercentage::Length(x) => x,
+        _ => 0.0,
+    }
+}
+
+/// A row flex container's horizontal gap in points; zero for non-row containers.
+pub(crate) fn gap_x(style: &CompactStyle) -> f32 {
+    let row = style.display() == Display::Flex && style.flex_wrap() == FlexWrap::NoWrap
+        && matches!(style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+    if !row { return 0.0; }
+    match style.gap().width.expand() {
         taffy::style::ExpandedLengthPercentage::Length(x) => x,
         _ => 0.0,
     }

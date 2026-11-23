@@ -63,6 +63,10 @@ impl RuntimeCore {
             }
         }
         self.reveal_row_x(scope, key);
+        if self.virtual_window_changed() {
+            self.commit_virtual_scroll(app, &Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
+            self.reveal_row_x(scope, key);
+        }
     }
 
     /// One placement of [`Self::reveal_row`]: whether it committed, and on the first, where the
@@ -106,7 +110,7 @@ impl RuntimeCore {
             Some((parent.path.clone(), f64::from(top), f64::from(height), f64::from(parent.local.h), f64::from(laid_top), f64::from(laid_h), f64::from(laid_end)))
         }).or_else(|| {
             self.tree.nodes.iter().filter(|n| in_scope(&n.path, scope)).filter_map(|n| {
-                let v = self.commit.virtuals.get(&n.path).filter(|v| in_scope(&v.scroll_path, scope))?;
+                let v = self.commit.virtuals.get(&n.path).filter(|v| !v.horizontal && in_scope(&v.scroll_path, scope))?;
                 let index = v.index_of(key).or_else(|| {
                     key.rmatch_indices('/').find_map(|(at, _)| {
                         let (scope, row_key) = (&key[..at], &key[at + 1..]);

@@ -48,7 +48,8 @@ impl El {
     /// (macOS does that itself). Left and Right arrows don't scroll it (text fields own them),
     /// nor do Page Up and Page Down. [`El::scroll_edge_fade`] fades its left and right edges,
     /// and [`Tx::scroll_into_view`] scrolls it to show a row. `El::virtualize` and
-    /// `El::virtual_rows` window vertical lists only.
+    /// `El::virtual_rows` window vertical lists; [`El::virtualize_x`] and [`El::virtual_cols`]
+    /// window horizontal strips.
     #[cfg_attr(debug_assertions, track_caller)]
     #[inline]
     pub fn scroll_x(mut self) -> Self {
