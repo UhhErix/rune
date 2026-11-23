@@ -142,6 +142,17 @@ impl Pixels {
         (self.id, frame.generation)
     }
 
+    /// Decodes PNG bytes synchronously into a ready [`Pixels`] buffer (for runtime-generated
+    /// PNGs such as QR codes, previews or clipboard images).
+    pub fn from_png(bytes: &[u8]) -> Result<Pixels, crate::ImageError> {
+        let img = crate::png_rgba8(bytes)
+            .map_err(|e| crate::ImageError(format!("PNG decode failed: {e}")))?;
+        let (w, h) = img.dimensions();
+        let pixels = Pixels::new();
+        pixels.set(w, h, img.into_raw());
+        Ok(pixels)
+    }
+
     /// The image's RGBA bytes as [`Pixels::set`] gave them (empty for a decoded image's mips).
     #[doc(hidden)]
     pub fn rgba(&self) -> Vec<u8> {
@@ -153,6 +164,46 @@ impl Pixels {
     pub(crate) fn hold_frame(&self) -> impl Drop + '_ {
         self.frame.lock().unwrap()
     }
+
+    /// Returns straight-alpha sRGB RGBA8 pixels for both [`Pixels::set`] buffers and
+    /// [`ImageCache`](crate::ImageCache)-decoded images (un-premultiplying top mip level 0).
+    pub fn to_rgba8(&self) -> (u32, u32, Vec<u8>) {
+        let frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
+        if !frame.rgba.is_empty() {
+            return (frame.width, frame.height, frame.rgba.clone());
+        }
+        if let Some(decoded) = &frame.mips
+            && let Some(top) = decoded.mips.first()
+        {
+            let mut out = Vec::with_capacity(top.pixels.len());
+            for px in top.pixels.as_chunks::<4>().0 {
+                let a = px[3];
+                if a == 0 {
+                    out.extend_from_slice(&[0, 0, 0, 0]);
+                } else if a == 255 {
+                    out.extend_from_slice(px);
+                } else {
+                    let af = f32::from(a) / 255.0;
+                    let r = linear_to_srgb_u8((srgb_u8_to_linear(px[0]) / af).min(1.0));
+                    let g = linear_to_srgb_u8((srgb_u8_to_linear(px[1]) / af).min(1.0));
+                    let b = linear_to_srgb_u8((srgb_u8_to_linear(px[2]) / af).min(1.0));
+                    out.extend_from_slice(&[r, g, b, a]);
+                }
+            }
+            return (top.width, top.height, out);
+        }
+        (frame.width, frame.height, Vec::new())
+    }
+}
+
+fn srgb_u8_to_linear(c: u8) -> f32 {
+    let x = f32::from(c) / 255.0;
+    if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+}
+
+fn linear_to_srgb_u8(x: f32) -> u8 {
+    let s = if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+    (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 /// Where an image of `size` texels draws in `rect` ([x, y, w, h], device pixels) and which window

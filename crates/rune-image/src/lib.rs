@@ -23,6 +23,7 @@ mod mips;
 pub mod pixels;
 #[doc(hidden)]
 pub mod place;
+pub mod qr;
 mod svg;
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,9 @@ pub use from_url::font_file;
 pub use pixels::Pixels;
 pub use place::Align;
 pub use place::SurfaceFit;
+pub use qr::EcLevel;
+pub use qr::QrCode;
+pub use qr::QrError;
 #[doc(hidden)]
 pub use svg::svg_rgba;
 pub use svg::svg_rgba_cover;
@@ -793,6 +797,32 @@ fn decode_capped(bytes: &[u8], max_side: u32) -> Result<Decoded, ImageError> {
 pub fn png_rgba8(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
     let decoder = image::codecs::png::PngDecoder::with_limits(std::io::Cursor::new(bytes), image::Limits::default())?;
     Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
+}
+
+/// Encodes straight-alpha sRGB RGBA8 pixels into PNG bytes.
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ImageError> {
+    use image::ImageEncoder;
+    if width == 0 || height == 0 {
+        return Err(ImageError("cannot encode empty image".into()));
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| ImageError("image dimensions overflow".into()))?;
+    if rgba.len() != expected {
+        return Err(ImageError(format!(
+            "RGBA length {} does not match {}x{} ({expected} bytes)",
+            rgba.len(),
+            width,
+            height
+        )));
+    }
+    let mut out = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut out);
+    encoder
+        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| ImageError(format!("PNG encode failed: {e}")))?;
+    Ok(out)
 }
 
 fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
