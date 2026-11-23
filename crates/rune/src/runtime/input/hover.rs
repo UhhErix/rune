@@ -165,7 +165,7 @@ impl RuntimeCore {
         if let Some(captured) = self.pointer.press.path() {
             for path in &self.pointer.hover_within {
                 if !inside.contains(path) && holds(path, captured)
-                    && self.tree.nodes.iter().enumerate().any(|(i, n)| n.path == *path && self.allowed(i))
+                    && self.tree.nodes.iter().enumerate().any(|(i, n)| n.path == *path && self.pointer_allowed(i))
                 {
                     inside.push(path.clone());
                 }
@@ -277,7 +277,7 @@ impl RuntimeCore {
     pub(crate) fn hover_live(&self, path: &str) -> Option<usize> {
         (0..self.tree.nodes.len())
             .find(|&i| self.tree.nodes[i].path == path && !self.subtree_exiting(i) && !self.subtree_unmounted(i))
-            .filter(|&i| self.allowed(i))
+            .filter(|&i| self.pointer_allowed(i))
     }
 
     /// The innermost `hover_alone` element under the pointer: the elements around it show no
@@ -285,7 +285,7 @@ impl RuntimeCore {
     fn hovered_alone(&self) -> Option<usize> {
         let (x, y) = self.pointer.pos?;
         (0..self.tree.nodes.len())
-            .filter(|&i| self.tree.nodes[i].vis.hover_alone && !self.subtree_exiting(i) && self.allowed(i) && self.node_contains(i, x, y))
+            .filter(|&i| self.tree.nodes[i].vis.hover_alone && !self.subtree_exiting(i) && self.pointer_allowed(i) && self.node_contains(i, x, y))
             .max_by_key(|&i| self.tree.nodes[i].path.len())
     }
 
@@ -302,7 +302,7 @@ impl RuntimeCore {
         (0..self.tree.nodes.len())
             .filter_map(|i| {
                 let key = self.tree.nodes[i].vis.hover_share.as_ref()?;
-                (!self.subtree_exiting(i) && self.allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
+                (!self.subtree_exiting(i) && self.pointer_allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
             })
             .collect()
     }
@@ -318,7 +318,7 @@ impl RuntimeCore {
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
         let capture_inside = if self.pointer.secondary_held() { inside } else { self.pointer.press_inside() };
         let held = captured == Some(n.path.as_str()) && capture_inside;
-        let allowed = self.allowed(i);
+        let allowed = self.pointer_allowed(i);
         // A held press stays hovered while it's inside, though a press scale shrank the drawn
         // rect away from the pointer. A group stays hovered while a descendant holds the press.
         let shadowed = alone.is_some_and(|a| a != i && holds(&n.path, &self.tree.nodes[a].path));
@@ -345,7 +345,7 @@ impl RuntimeCore {
         // The middle or secondary button shows pressed what it went down on while it's over
         // it, as the primary does.
         let tinted = self.pointer.tint_path() == Some(n.path.as_str()) && self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y));
-        self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted)
+        self.pointer_allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted)
     }
 
     /// Whether `update_interaction` would retarget any hover, press or press-scale track from
