@@ -238,7 +238,7 @@ impl RuntimeCore {
         };
         let inset = if borderless { 0.0 } else { chrome.titlebar_inset() };
         self.set_titlebar_inset(inset);
-        let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| crate::titlebar::Caption::new(t.height()));
+        let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| crate::titlebar::Caption::with_style(t.height(), t.caption()));
         let height = titlebar.filter(|_| cfg!(any(target_os = "macos", target_os = "windows"))).map_or(0.0, |t| t.height());
         let leading = if cfg!(target_os = "macos") { inset } else { 0.0 };
         let trailing = caption.map_or(0.0, |c| c.width(self.env.scale));
