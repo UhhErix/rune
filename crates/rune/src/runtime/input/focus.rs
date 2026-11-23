@@ -24,6 +24,10 @@ const PRESSABLE_ROLES: [&str; 9] = ["button", "link", "tab", "checkbox", "switch
 pub(in crate::runtime) struct ModalScope {
     index: usize,
     members: Vec<bool>,
+    /// Nodes live through every open modal (`El::modal_live`); empty when none is.
+    live: Vec<bool>,
+    /// The open modals that dismiss on an outside press, innermost first.
+    outside: Vec<usize>,
 }
 
 /// Whether node `i` in `nodes` is not inert and has positive opacity along its ancestor chain.
@@ -110,8 +114,30 @@ fn landmark_of(nodes: &[Node], mut i: usize) -> Option<usize> {
 
 impl ModalScope {
     fn build(nodes: &[Node], is_exiting: impl Fn(usize) -> bool, is_unmounted: impl Fn(usize) -> bool) -> Option<Self> {
-        let index = nodes.iter().enumerate().rev()
-            .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !is_exiting(*i) && !is_unmounted(*i)).map(|(i, _)| i)?;
+        let stack: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| {
+                n.handlers.get().is_some_and(|h| h.modal.is_some())
+                    && !is_exiting(*i)
+                    && !is_unmounted(*i)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let index = *stack.last()?;
+        let outside = stack
+            .iter()
+            .rev()
+            .copied()
+            .filter(|&m| {
+                nodes[m]
+                    .handlers
+                    .get()
+                    .and_then(|h| h.modal.as_ref())
+                    .is_some_and(|spec| spec.outside)
+            })
+            .collect();
+        let live = super::modal_live::through(nodes, &stack);
         // The Windows caption buttons are the window's, not the view's: a modal in the view
         // leaves them to the pointer and assistive technology, as the native ones are.
         let caption = |n: &Node| n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY)
@@ -130,7 +156,12 @@ impl ModalScope {
             }
             if !changed { break; }
         }
-        Some(Self { index, members })
+        Some(Self {
+            index,
+            members,
+            live,
+            outside,
+        })
     }
 }
 
@@ -152,10 +183,32 @@ impl focus_machine::KeyboardState {
         self.modal_scope.as_ref().is_none_or(|m| m.members.get(i).copied().unwrap_or(false))
     }
 
+    /// Node `i` is live through the open modal (`El::modal_live`): pointer-only, outside its scope.
+    #[inline]
+    pub(in crate::runtime) fn live_through(&self, i: usize) -> bool {
+        self.modal_scope
+            .as_ref()
+            .is_some_and(|m| m.live.get(i).copied().unwrap_or(false))
+    }
+
     /// Input may reach node `i`: it's outside any `El::inert` subtree and not behind a modal.
     #[inline]
     pub(in crate::runtime) fn allowed(&self, nodes: &[Node], i: usize) -> bool {
         !nodes.get(i).is_some_and(|n| n.inert) && self.modal_member(i)
+    }
+
+    /// The pointer may reach node `i`: as [`Self::allowed`], or live through the open modal.
+    #[inline]
+    pub(in crate::runtime) fn pointer_allowed(&self, nodes: &[Node], i: usize) -> bool {
+        !nodes.get(i).is_some_and(|n| n.inert) && (self.modal_member(i) || self.live_through(i))
+    }
+
+    /// The open modals that dismiss on an outside press, innermost first.
+    #[inline]
+    pub(in crate::runtime) fn outside_modals(&self) -> &[usize] {
+        self.modal_scope
+            .as_ref()
+            .map_or(&[], |m| m.outside.as_slice())
     }
 
     #[inline]
@@ -234,6 +287,12 @@ impl RuntimeCore {
     #[inline]
     pub(crate) fn allowed(&self, i: usize) -> bool {
         self.kbd.allowed(&self.tree.nodes, i)
+    }
+    /// The pointer may reach node `i`: as [`Self::allowed`], or it's live through the open modal
+    /// (`El::modal_live`), which only hover, cursor and press read.
+    #[inline]
+    pub(crate) fn pointer_allowed(&self, i: usize) -> bool {
+        self.kbd.pointer_allowed(&self.tree.nodes, i)
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
     pub(crate) fn takes_focus(&self, n: &Node) -> bool {

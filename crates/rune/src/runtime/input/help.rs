@@ -337,7 +337,7 @@ impl RuntimeCore {
         let covered = over.is_some_and(|(k, top)| {
             k >= seq && self.tree.node_index.get(&top).is_some_and(|&t| !std::iter::successors(Some(t), |&p| self.tree.nodes[p].parent).any(|p| p == h))
         });
-        Some((h, link, self.allowed(h) && !covered))
+        Some((h, link, self.pointer_allowed(h) && !covered))
     }
 
     /// Whether the current pointer position changes what the tooltip machine sees, so a host
@@ -421,7 +421,7 @@ impl RuntimeCore {
             for &(id, r, seq, link) in self.hit.help_hits() {
                 let Some(&i) = self.tree.node_index.get(&id) else { continue };
                 let Some(text) = self.help_text(i, link) else { continue };
-                if self.subtree_exiting(i) || !self.allowed(i) { continue; }
+                if self.subtree_exiting(i) || !self.pointer_allowed(i) { continue; }
                 let words = crate::el::help_words(text);
                 regions.extend(self.unoccluded(i, r, seq).into_iter().map(|p| (p, words.clone().into_owned())));
             }
