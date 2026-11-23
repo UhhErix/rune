@@ -9,6 +9,122 @@ backdrop capture that the elements in a frame share. `El::backdrop_blur` stays a
 Paths are repo-relative. Rune paths are under `crates/`. Exo paths are prefixed `exo:` and are relative to
 the Exo launcher repo. Line numbers are from the `exo` branch at `fc71db1a`.
 
+**Retarget (phase 2).** The material now matches Apple's Liquid Glass (iOS 26, macOS 26), not the web launcher's
+CSS glass. §0 says what that means and where each value comes from. It replaces the web-token presets of §4 and the
+answers that followed the web (σ 10/16, Chromium's blend space). The capture architecture of §1–§3 stays: one
+backdrop capture per epoch, a shared frost pyramid, one composite draw per glass shape.
+
+## 0. Apple parity
+
+### What Apple documents
+
+| Concept | Apple's API | Rune |
+| --- | --- | --- |
+| Material and variants | `glassEffect(_:in:)` with `Glass.regular`, `.clear`, `.identity`; `UIGlassEffect(style:)` | `El::liquid_glass(LiquidGlass::regular() / clear() / identity())` |
+| Tint | `Glass.tint(_:)`, `UIGlassEffect.tintColor` | `LiquidGlass::tint(Color)` |
+| Interaction | `Glass.interactive(_:)`, `UIGlassEffect.isInteractive` | `LiquidGlass::interactive()` |
+| Default shape | "the regular variant … along with a Capsule shape" (`glassEffect(_:in:)`) | A capsule unless the element sets `radius` |
+| Merging | `GlassEffectContainer(spacing:)`, `UIGlassContainerEffect.spacing`: "the distance between elements at which they begin to merge" | `El::glass_container(spacing)` |
+| Morphing | `glassEffectID(_:in:)` with a `@Namespace`; `GlassEffectTransition.matchedGeometry` / `.materialize` / `.identity` | `El::glass_id(id)`: a shared-element flight (`El::matched`) inside the container; glass that appears unmatched materializes |
+| Union | `glassEffectUnion(id:namespace:)`: "All Liquid Glass effects with the same shape and Liquid Glass variant will be combined into a single shape" | `El::glass_union(id)` |
+| Container rendering | "the glass container will render all glass elements in one combined view, behind the visual effect view's contentView" (`UIGlassContainerEffect`); "glass can not sample other glass" (WWDC25 323) | One composite draw per container, before any member's content; members share one capture |
+
+Sources: [HIG › Materials](https://developer.apple.com/design/human-interface-guidelines/materials);
+[SwiftUI `Glass`](https://developer.apple.com/documentation/swiftui/glass),
+[`glassEffect(_:in:)`](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:)),
+[`GlassEffectContainer`](https://developer.apple.com/documentation/swiftui/glasseffectcontainer),
+[`glassEffectID(_:in:)`](https://developer.apple.com/documentation/swiftui/view/glasseffectid(_:in:)),
+[`glassEffectUnion(id:namespace:)`](https://developer.apple.com/documentation/swiftui/view/glasseffectunion(id:namespace:)),
+[`GlassEffectTransition`](https://developer.apple.com/documentation/swiftui/glasseffecttransition),
+[Applying Liquid Glass to custom views](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views);
+[`UIGlassEffect`](https://developer.apple.com/documentation/uikit/uiglasseffect),
+[`UIGlassContainerEffect`](https://developer.apple.com/documentation/uikit/uiglasscontainereffect);
+WWDC25 [219 "Meet Liquid Glass"](https://developer.apple.com/videos/play/wwdc2025/219/) and
+[323 "Build a SwiftUI app with the new design"](https://developer.apple.com/videos/play/wwdc2025/323/).
+
+### What Apple describes but doesn't number
+
+- **Lensing** is "the primary way Liquid Glass visually defines itself"; the material "bends, shapes, and
+  concentrates light" (219, Dynamics).
+- **Highlights** "respond to geometry"; lights "move in space, causing light to travel around the material,
+  defining its silhouette"; "in some cases, the lighting responds to device motion" (219, Principles).
+- **Adaptivity.** Regular "blurs and adjusts the luminosity of background content" (HIG). Its shadow gets more opaque
+  over text and less opaque over a solid light background. Small elements flip between light and dark with what is
+  under them, and their symbols flip too. Large elements adapt but don't flip (219, Adaptivity).
+- **Size.** Larger glass "simulates a thicker, more substantial material. It casts deeper, richer shadows, has more
+  pronounced lensing and refraction effects, and a softer scattering of light" (219).
+- **Clear** "is permanently more transparent", has no adaptive behaviours and "needs a dimming layer". The HIG's
+  number: "If the underlying content is bright, consider adding a dark dimming layer of 35% opacity."
+- **Tint** "generates a range of tones that are mapped to content brightness underneath" (219), unlike a flat fill.
+- **Interaction.** Glass "reacts to user interaction by scaling, bouncing, and shimmering" (323). It "illuminates
+  from within", with a glow that starts "right under your fingertips" and spreads through the element (219).
+- **Appearing.** Glass "materialize[s] in and out by gradually modulating the light bending and lensing" (219), not by
+  a plain fade.
+- **Accessibility** (219). Reduce Transparency "makes Liquid Glass frostier and obscures more of the content behind
+  it". Increase Contrast "makes elements predominantly black or white and highlights them with a contrasting border".
+  Reduce Motion "decreases the intensity of some effects and disables any elastic properties".
+
+### Values, and where each comes from
+
+Apple publishes no shader parameters. These values were measured from Apple's own published images and video:
+the June 2025 newsroom stills (the iOS 26 and macOS Tahoe 26 announcements, about 1 px per point) and the WWDC25 219
+session video (1920×1080). Measurement scripts and crops are kept out of the repo, as is the side-by-side board; the
+report that accompanies phase 2 holds them. Where nothing could be measured, the value is marked *tuned*.
+
+| Property | Rune value | Source |
+| --- | --- | --- |
+| Rim width | 1 pt (in device px: `max(1, k_px)`) | Newsroom iOS 26 hero, lock-screen buttons: rim FWHM 1.0–1.5 px. Music mini-player and Dock (macOS Tahoe): a 1 px peak. |
+| Rim contrast | Peak +0.16 linear white on the lit side, 0.45× of that opposite, 0.1× at 90° | Same stills: +20…+45 (8-bit) over the interior at the top-left and bottom-right, about +5 at top-right and bottom-left. |
+| Specular shape | Two lobes along the light axis: the primary faces the light, the secondary is opposite at 0.5×, `pow(|cos|, 3)` falloff (half width ≈ 45°) | WWDC 219, 00:46–00:56, a glass sphere: lobes +85 and +40…+50 opposite each other, 2–4 px on a 340 px radius. |
+| Light | Fixed above the window at the top-left. Each shape's lobe angle follows the shape's position, its velocity tilts the lobes, and interactive glass adds the pointer as a second light | 219: highlights "respond to geometry" and "move in space"; *tuned*. |
+| Lensing profile | Sample offset toward the centre, `D(d) = Dmax·(1 − d/b)²` for `d < b`, 0 beyond | WWDC 219 at 00:50, glass over a grid: the displacement is 0 past 0.17 r, 34 px at 30 px from the rim, 13 px at 40 px, about 136 px at the rim. A `(1−t)²` fit has residual under 15%. |
+| Bevel `b` | `0.17 × min(w, h)/2`, clamped to 2…12 pt | Same fit: b ≈ 58 px on r = 341 px. The 12 pt cap keeps large panels subtle (coordinator answer 1). |
+| Refraction `Dmax` | `2.3 × b` | Same fit: 136 / 58. |
+| Dispersion | R × (1 − 0.03), B × (1 + 0.03) of `D`, in the bevel band only | WWDC 219 at 00:50: a rainbow fringe of 3–4 px on a 136 px displacement. |
+| Frost, regular | σ = `clamp(2 + 0.04·min(w,h), 3, 10)` pt (44 pt control → 3.8, 300 pt menu → 10) | HIG: regular "blurs". 219: larger means "softer scattering". Under the Music mini-player and the lock-screen platter, detail at about 8 pt is gone. |
+| Frost, clear | σ = 0.6 pt | HIG: clear "is highly translucent". |
+| Clear dimming | 35% black, scaled by `smoothstep(0.35, 0.65, L)` of the backdrop under the shape | HIG Materials, 35%. |
+| Regular tone | Mix toward white by 0.20 over a bright backdrop, toward black by 0.24 over a dark one, `smoothstep(0.3, 0.7, L)` between them, saturation 1.35 | HIG figures: darker over dark, lighter over light. The macOS Dock measures +26 over 95 (8-bit). Saturation is *tuned* ("picking colors from nearby content", 323). |
+| Large elements don't flip | The tone's mix is held at the light side for shapes over 200 pt on both axes (menus, sidebars) | 219. |
+| Tint | `tint(c)` maps `c` to backdrop brightness: `mix(c·0.75, c, L)` at 0.55 alpha over the frost | 219, "a range of tones … mapped to content brightness"; alpha is *tuned* against the solid-fill comparison in 219. |
+| Shadow | y 2 pt, blur `0.25·min(w,h)` clamped to 6…18 pt; opacity 0.06 over a flat light backdrop up to 0.20 over detail (text) | 219, adaptive shadow rule; numbers *tuned*. |
+| Press scale | 1.10, and up to 1.18 along the drag direction (gel stretch), on a press of interactive glass | WWDC 219, 03:52–03:55, share button: rest Ø 432–456 px, pressed 478 × 540 px. |
+| Press spring | Response 0.21 s, damping ratio 0.6 (about 10% overshoot). Release uses the same spring | Same shot: rest to peak in 3–4 frames at 30 fps, then a 5 px overshoot on 45 px of travel and back. |
+| Drag follow | The glass translates toward the pointer by 0.25 of its offset, capped at 0.12 × its size | Same shot: 117 px of drift on a 444 px button. |
+| Touch glow | Radial white from the touch point. The radius springs from 0 to the shape's diagonal in about 0.2 s, at 0.22 strength at the point and 0.10 at the rim | 219, "illuminates from within … right under your fingertips"; peak brightening +45 (8-bit) in the concept shot. The shipped strength is *tuned* lower. |
+| Hover | +0.05 white over the glass (pointer platforms only) | *tuned*. macOS 26 controls brighten under the pointer; iOS has no hover. |
+| Merge | `smin(d₁, d₂, k)` with `k = spacing`: shapes join when their nearest edges are within `spacing` | `UIGlassContainerEffect.spacing`, and "morphs … when the eraser's nearest edge is less than or equal to the container's spacing" (Applying Liquid Glass). |
+| Materialize | Opacity, lensing and frost ramp together from 0 | 219; `GlassEffectTransition.materialize`. |
+| Reduce Transparency | σ × 2.5 (at least 10 pt), and tone mix 0.75 | 219. |
+| Increase Contrast | Tone mix 0.9 toward black or white, plus a 1 pt border in the opposite tone at 0.6 | 219. |
+| Reduce Motion | No stretch, follow or overshoot (the press is critically damped). The light is fixed (no velocity tilt). Glass ids don't fly (`El::matched` is already off under Reduce Motion) | 219. |
+
+**Recreations, used for the math only.** kube.io's "Liquid Glass in the browser" (no licence stated, so no code
+is copied) gives the convex-squircle height profile and IOR 1.5; the fitted `(1 − t)²` displacement follows the same
+curve to within the fit error. `liquid-glass-react` (MIT, © 2025 Max Rovensky) shows per-channel displacement for
+dispersion and pointer-driven elasticity. Neither is a dependency, and no code was copied.
+
+### What this changes in the build
+
+- **One draw per container, not per element.** A container's members register shapes (rect, radii, variant, tint,
+  interaction state) into a side-table range. One `KIND_LIQUID_GLASS` record covers the union bounds inflated by the
+  shadow reach. Its shader evaluates `smin` over the shapes (at most 32 per draw, and a container with more splits),
+  so the merged blob, its lensing normal (the SDF gradient by central differences) and its rim are all exact where
+  shapes meet. A lone glass element is a container of one.
+- **Same-frame adaptivity.** The composite reads the coarsest pyramid levels under the shape for `L` (the mean
+  luminance) and `detail` (`|F3 − F6|`), and derives the tone, the dimming and the shadow opacity from them in the
+  same frame. Nothing waits on a readback.
+- **Foreground flip on the CPU.** After each epoch's down chain, a probe pass writes one texel per glass shape with an
+  id (`L`, `detail`) into a small `Rgba16Float` strip. That strip is copied into a ring of three `MAP_READ` buffers and
+  mapped asynchronously; a later frame reads whichever buffer is ready, and the frame never stalls. The runtime
+  smooths `L` (a 150 ms time constant) and flips `Cx::glass_is_dark(id)` with hysteresis (0.45 / 0.55), so symbols
+  and text can follow the glass.
+- **Interaction reuses the runtime's press tracks.** Press, hover and `press_scale` already exist (`P_PRESS`,
+  `P_HOVER`, `P_PRESS_SCALE` in `crates/rune/src/runtime/input/hover.rs`). Interactive glass adds the glass press
+  spring, the stretch and follow, and the touch glow, which reads the pointer position at paint time.
+- **Morph reuses `El::matched`.** `glass_id` flies the shape with the runtime's shared-element spring. During the
+  flight the shape stays in its container's draw, so it merges and splits with its neighbours.
+
 ## 1. Where it plugs in
 
 ### What exists today
@@ -285,6 +401,35 @@ The one exception is a frame where the policy says solid (§5). That frame is so
 
 ## 4. API
 
+**Phase 2 API (Apple parity, supersedes the block below):**
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidGlass { /* variant, tint, interactive, tuning */ }
+impl LiquidGlass {
+    pub fn regular() -> Self;                  // Glass.regular
+    pub fn clear() -> Self;                    // Glass.clear: 35% dimming over bright content
+    pub fn identity() -> Self;                 // Glass.identity: no effect
+    pub fn tint(self, c: Color) -> Self;       // Glass.tint(_:)
+    pub fn interactive(self) -> Self;          // Glass.interactive(): press spring, stretch, glow, hover
+    pub fn frost(self, sigma_pt: f32) -> Self; // tuning: override the size-derived frost
+    pub fn refraction(self, k: f32) -> Self;   // tuning: scale lensing (1 = Apple, 0 = flat)
+    pub fn still(self, c: Color) -> Self;      // the solid fill when glass is off
+}
+impl El {
+    pub fn liquid_glass(self, g: LiquidGlass) -> Self;   // .glassEffect(g, in: capsule or this El's radius)
+    pub fn glass_container(self, spacing: f32) -> Self;  // GlassEffectContainer(spacing:)
+    pub fn glass_id(self, id: impl Into<String>) -> Self;    // glassEffectID (namespace = the window)
+    pub fn glass_union(self, id: impl Into<String>) -> Self; // glassEffectUnion
+}
+impl Cx { pub fn glass_is_dark(&self, id: &str) -> bool; }  // smoothed backdrop luminance under glass `id`
+```
+
+`GlassPolicy`, `App::glass` and `Tx::set_glass_policy` are unchanged from below. The web-token presets that follow
+are no longer built.
+
+**Phase 1 API (web tokens, superseded):**
+
 ```rust
 /// A Liquid Glass material: frosts, tones, tints, bends and lights what this window has drawn behind the element.
 /// Fields are private; builders keep it extensible without breaking apps.
@@ -534,78 +679,60 @@ The estimate assumes 448 GB/s and treats the work as bandwidth-bound, with B-spl
 
 ## 8. Phase 2 build plan
 
-Every step ends with these gates:
+The coordinator's answers to §7 for phase 2: refraction on, kept subtle, with no stepped edges at 1080p (Q1); Exo
+sets `GlassPolicy::Glass`, Rune defaults to `FollowSystem` (Q2); glass inside cache, blur and blend layers hoists
+and samples the real backdrop (Q3); `BlurBudget` stays for `backdrop_blur` (Q7); no CPU boot frame for a first view
+with glass, given the frame-1 == frame-2 test (Q8). Q4 and Q6 are replaced by §0: the values are Apple's, not the
+web's.
 
-- `cargo fmt --check`
-- `cargo clippy --workspace -D warnings` (the repo's `cargo lint`)
-- `cargo test --workspace`
-- `bash scripts/check-local.sh`, for file sizes, folder shape and hygiene
+Every step ends with `cargo fmt --check`, `cargo lint` (clippy, `-D warnings`), the fork suite and
+`bash scripts/check-local.sh`. GPU pixel tests use the headless harness of
+`crates/rune/src/render/backdrop_blur_tests.rs` (`Gpu::headless()`, `Renderer::new(.., OFFSCREEN_FORMAT)`,
+`Offscreen`, `draw`, `read`).
 
-GPU pixel tests use the existing headless harness: `Gpu::headless()`, then `Renderer::new(.., OFFSCREEN_FORMAT)`,
-`Offscreen::new`, `draw`, `copy` and `read`, as in `crates/rune/src/render/backdrop_blur_tests.rs:20-124`. Tests that
-count GPU work run with `--features rune/test-gpu-counters,rune-gpu/test-gpu-counters`. Rune has no image-golden
-harness. "Snapshot" here means asserting pixels at chosen points and comparing whole buffers between two renders.
-
-1. **Types and API, without the renderer.** Add `el/liquid_glass.rs` (`LiquidGlass`, presets, builders,
-   `El::liquid_glass`, `El::glass_group`), the cold field, `GlassPolicy`, `App::glass` and `Tx::set_glass_policy`.
-   For now, paint emits the still fallback only.
-   *Tests:* builders clamp non-finite values; presets equal the §4 table (one test per row); an element with
-   `liquid_glass` paints a `Rect` with the `still` fill; `AppSpec` literals still compile (an existing example
-   builds).
-2. **Record, kind and side table.** Add `Kind::LiquidGlass = 14`, `KIND_LIQUID_GLASS`, `COUNT = 15` and the ABI
-   asserts. Add `push_liquid_glass` with the signed radii, rounded clip, fade and opacity in `fill.a`; the
-   `GlassParams` table on the paint state; `glass_hole` at `layers.rs:332`; `set_liquid_glass` at
-   `host_step.rs:625`; `NeedsGpu::LiquidGlass`; and `damaged.rs` `"liquid glass"`.
-   *Tests:* the runtime emits one record per glass element with no cap (70 elements give 70 records); record fields
-   match `push_backdrop_blur`'s for the same element; `needs_gpu` refuses; `redraws_in_place` refuses; `abi_tests`
-   pass.
-3. **Shared frost pyramid.** Add `render/liquid_glass/pyramid.rs`, `liquid_glass_down.wgsl` and the measured
-   `GLASS_SIGMAS` table with `sigma_lod`.
-   *Tests:* `levels_cover_the_range_continuously`-style monotonic coverage; the line spread of a 1 px white line for
-   σ ∈ {2, 6, 10, 14, 16, 18, 24, 40} pt is within 10% of a CPU Gaussian; a slow scroll (0.25 px per frame over 16
-   frames) of a stripe pattern under σ = 14 has per-pixel temporal variance below a bound (the shimmer gate, risk 1).
-   If the last test fails, switch to one up chain per distinct σ before going further.
-4. **Epoch planner.** Add `render/liquid_glass/plan.rs`: sample regions, the dirty union, join or split, group
-   capture, and union rects aligned to F6.
-   *Tests (pure, no GPU):* two far-apart elements make 1 epoch; the same elements plus an instance between them inside
-   the second's reach make 2; a `glass_group` makes 1; a popover over the Bar makes 2; `clear()` makes 0; 64 badges
-   make 1; the union rect is aligned and clipped to the viewport.
-5. **Composite, end to end.** Add `liquid_glass.wgsl` (§2), pipelines built synchronously in `prepare_liquid_glass`,
-   the `draw_with_effects` branch, still mode, and the breaker's `Kind::Rect` rewrite.
-   *Tests (GPU):* red/blue halves under `control()` frost across the seam (as in
-   `custom_max_backdrop_blurs_renders_past_default_and_grows_capacity`); `saturation(1.8)`, `brightness(.62)` and
-   `contrast(.9)` match the CSS matrices on a flat colour within 1/255; the rim is brighter at the top than at the
-   bottom; `inner_shadow` lights the top edge only; 64 elements all frost; **glass over glass**: a popover over a
-   green glass element samples green (as `overlapping_backdrop_blurs_sample_fresh_rendered_underlayer`); clip, rounded
-   clip and fade cut the glass exactly as they cut `backdrop_blur`; **first frame**: a fresh renderer's frame 1 equals
-   frame 2 byte for byte and differs from still mode in the glass region; a borrowed pass draws still mode.
-6. **Fades, scales and hoisting.** Add hoisting over alpha-only layers in `runtime/paint/build/layers.rs`.
-   *Tests:* a popover whose wrapper fades at 0.5 frosts the window, not an empty layer (centre pixel ≈ 0.5·glass +
-   0.5·behind); `popover_transition` at t = 0+ shows frost; `scale_anchor(.96)` scales the shape and keeps the rim
-   1 device px; glass inside `cache()` still samples the layer (CSS semantics, Q3).
-7. **Refraction, dispersion, specular, sheen.** Add the bevel-band code paths.
-   *Tests:* with refraction off, the band equals the interior; with `refraction(6, 1.5)` a vertical edge pulls in
-   outside pixels within `depth`; `dispersion(0)` is bit-identical to off; dispersion > 0 separates R and B on a white
-   line; the sheen stops at `stop`.
-8. **Accessibility.** Add `reduced_transparency()` per platform, the `RUNE_REDUCE_TRANSPARENCY` preset, the runtime
-   and `Cx` plumbing, and policy resolution with contrast and increased contrast.
-   *Tests:* with the preset on, glass paints `still` and no record; `GlassPolicy::Glass` overrides reduced
-   transparency but not increased contrast; a contrast theme paints its `window` colour; a policy change re-paints
-   without a relaunch. A manual check on Windows: toggling Transparency effects flips glass live.
-9. **DX12 and first use.** Add DXBC for both shaders through `regen_dxbc`, `dxbc_tests`, and `first_use` entries.
-   *Tests:* `dxbc_tests` covers the new stages; `first_use_ms` for liquid glass is reported. On DX12 the composite's
-   first build uses DXBC, never FXC.
-10. **Bench and budget.** Add `examples/liquid_glass_bench.rs` (§6) and the pyramid in `report_pools`.
-    *Gate:* the `exo` scene's median delta is ≤ 0.5 ms on an RTX 3070, DX12, 1080p, with `--profile perf` paired runs.
-    The numbers go in the PR description, not the repo. Add `scripts/motion-audit` scenarios for a fading popover
-    and a scaling menu with glass.
-11. **Docs and changelog.** Add the `El::liquid_glass` doc comment (cost model, epochs, groups, fallbacks,
-    accessibility), the `changelog/unreleased/<date>-liquid-glass.md` bullet, a site page, and an example
-    (`examples/liquid_glass.rs`).
-    *Gate:* `cargo doc` has no warnings for the new items.
-12. **Exo adoption** (in Exo, after Rune lands). Map `glass_capsule_opt`/`glass_panel_opt`
-    (`exo: apps/launcher/native-ui/crates/exo-kit/src/components.rs:32-80`) to `liquid_glass` presets, put the Bar
-    in a `glass_group`, delete `BlurBudget` (Q7), and add `App::glass(..)` per Q2.
+1. **Types and API.** `el/liquid_glass.rs`: `LiquidGlass` (`regular`, `clear`, `identity`, `tint`, `interactive`,
+   tuning builders), `El::liquid_glass`, `El::glass_container`, `El::glass_id`, `El::glass_union`; `GlassPolicy`,
+   `App::glass`, `Tx::set_glass_policy`. The §0 value table lives in one `render/liquid_glass/apple.rs` so each
+   number has one home and a source comment.
+   *Tests:* builders clamp non-finite values; `identity()` paints nothing; the size-derived bevel, refraction and
+   frost follow §0 for a 44 pt control and a 300 pt menu.
+2. **Record, kind and shape table.** `Kind::LiquidGlass = 14`, `COUNT = 15`. Paint pushes one record per container,
+   placed where the container's first member paints, with the members' shapes in a side table (rect, radii,
+   variant, tint, press, glow, opacity). Glass draws behind every member's content. `NeedsGpu::LiquidGlass`,
+   `damaged.rs` refusal.
+   *Tests:* no cap (70 elements, 70 shapes); a container of 3 is one record with 3 shapes; a lone glass is a
+   container of one; members' content paints after the record; ABI asserts.
+3. **Capture and frost.** One capture per epoch (§2) and a down-only pyramid; σ from §0.
+   *Tests:* frost line spread within 10% of a Gaussian at σ 3, 6, 10 pt; the shimmer gate (risk 1).
+4. **Composite.** Lensing `D = Dmax(1 − d/b)²` toward the centre in the bevel band, dispersion ±3%, the two-lobe
+   specular, the adaptive tone from coarse levels, clear's dimming, tint by brightness, the shadow in the same
+   draw.
+   *Tests:* a 1920×1080, scale 1 render of a capsule over a fine grid has no stair-stepping along the rim (the
+   row-to-row change of the rim's sub-pixel position is monotone and under 0.5 px per row); a grid line near the rim
+   is displaced inward; the centre equals the frost; regular over white is lighter than over black; clear over white
+   is dimmed; frame 1 == frame 2 on a fresh renderer.
+5. **Containers.** `smin` with `k = spacing` over the shape table, the SDF gradient as the lensing normal.
+   *Tests:* two capsules 8 pt apart in a container with spacing 10 fill the gap's centre; with spacing 4 they don't;
+   the merged rim has no seam.
+6. **Hoisting.** Glass inside an alpha-only, cache, blur or blend layer moves its record to the frame pass at the
+   layer's position and samples the real backdrop (Q3).
+   *Tests:* a fading popover frosts the window; glass in `cache()` frosts what is behind the cache.
+7. **Luminance probe and `Cx::glass_is_dark`.** A probe pass per epoch, a ring of three `MAP_READ` buffers mapped
+   asynchronously, 150 ms smoothing with hysteresis.
+   *Tests:* glass over white reads light and over black reads dark within a few frames; the frame never waits on a
+   map (a counter of blocking polls stays 0).
+8. **Interactive.** Press with the §0 spring and scale, stretch and follow, the touch glow from the pointer, hover.
+   *Tests:* a press of interactive glass grows its shape to 1.10; release springs back with overshoot; the glow
+   brightens the pointer side; non-interactive glass doesn't scale.
+9. **Morph and materialize.** `glass_id` rides `El::matched` in its container's draw; unmatched glass materializes.
+   *Tests:* a glass id moving between two containers flies; mid-flight it merges with neighbours.
+10. **Accessibility.** Reduce Transparency, Increase Contrast and Reduce Motion as §0.
+    *Tests:* each setting changes the record's parameters as listed; Reduce Motion stops the press overshoot.
+11. **DX12 and first use.** DXBC through `regen_dxbc`, `first_use` entries.
+12. **Bench.** GPU timestamps at 1080p for the Exo-like scene; `scripts/motion-audit` scenarios for press and morph;
+    the changelog entry.
+13. **Exo check** (in a scratch clone, not committed): regular for controls, clear over media and covers, the Bar
+    in a container so its tabs merge; parity snaps before and after.
 
 Upstream: the feature lives in `crates/rune/src/el/liquid_glass.rs`, `crates/rune/src/render/liquid_glass/`, two
 WGSL files, the preferences addition and one changelog entry. It touches existing files only at the integration
