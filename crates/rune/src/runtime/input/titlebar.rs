@@ -277,7 +277,7 @@ impl RuntimeCore {
         let inset = chrome.titlebar_inset();
         self.set_titlebar_inset(inset);
         let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| {
-            let mut caption = crate::titlebar::Caption::new(t.height());
+            let mut caption = crate::titlebar::Caption::with_style(t.height(), t.caption());
             caption.mirrored = rtl;
             caption
         });

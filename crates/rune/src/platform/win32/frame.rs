@@ -39,7 +39,7 @@ use windows_sys::Win32::UI::Shell::{ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, AB
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::runtime::{DragHit, WindowMenu, drag_hit_at};
-use crate::titlebar::{Caption, CaptionButton, CaptionState};
+use crate::titlebar::{Caption, CaptionButton, CaptionState, CaptionStyle, Titlebar};
 
 const SUBCLASS: usize = 0x5255_4e46;
 const DRAG_SUBCLASS: usize = 0x5255_4e44;
@@ -54,6 +54,7 @@ pub(crate) struct CustomFrame {
 struct State {
     /// The titlebar's height in points, which the caption buttons take.
     height: Cell<f32>,
+    style: Cell<CaptionStyle>,
     caption: Cell<CaptionState>,
     /// Windows' rect for the new scale while `WM_DPICHANGED` runs: winit's own `SetWindowPos`
     /// lands on it (`WM_WINDOWPOSCHANGING`), so the window moves and resizes once.
@@ -65,10 +66,11 @@ struct State {
 
 impl CustomFrame {
     /// Takes the title bar off `window`, keeping its client size.
-    pub(crate) fn install(window: &winit::window::Window, height: f32) -> Option<Self> {
+    pub(crate) fn install(window: &winit::window::Window, titlebar: Titlebar) -> Option<Self> {
         let hwnd = super::hwnd(window)?;
         let state = Rc::new(State {
-            height: Cell::new(height),
+            height: Cell::new(titlebar.height()),
+            style: Cell::new(titlebar.caption()),
             caption: Cell::new(CaptionState::Idle),
             dpi_rect: Cell::new(None),
             drag_hits: RefCell::new(Vec::new()),
@@ -98,13 +100,14 @@ impl CustomFrame {
     pub(crate) fn caption(&self, window: &winit::window::Window) -> Caption {
         match super::hwnd(window) {
             Some(hwnd) => self.state.caption(hwnd),
-            None => Caption::new(self.state.height.get()),
+            None => Caption::with_style(self.state.height.get(), self.state.style.get()),
         }
     }
 
-    /// A new titlebar height (`Cx::titlebar_height`): the buttons and the band they hit-test.
-    pub(crate) fn set_height(&self, height: f32) {
-        self.state.height.set(height);
+    /// A new titlebar (`Cx::set_titlebar`, `Cx::titlebar_height`): the buttons and the rects they hit-test.
+    pub(crate) fn set_titlebar(&self, titlebar: Titlebar) {
+        self.state.height.set(titlebar.height());
+        self.state.style.set(titlebar.caption());
     }
 
     /// Publishes the committed bare `.window_drag()` hit-test region (window points).
@@ -497,6 +500,7 @@ impl State {
         let (zoomed, style) = unsafe { (IsZoomed(hwnd) != 0, GetWindowLongPtrW(hwnd, GWL_STYLE) as u32) };
         Caption {
             height: self.height.get(),
+            style: self.style.get(),
             state: self.caption.get(),
             maximized: zoomed,
             minimizable: style & WS_MINIMIZEBOX != 0,
