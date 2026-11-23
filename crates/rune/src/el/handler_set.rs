@@ -2,9 +2,9 @@
 //! `Cold<Handlers>`, so elements without callbacks pay one pointer.
 use crate::cold::Empty;
 use crate::el::{
-    AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn, LayoutTxFn, ModalSpec,
-    PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy, VisibleRowsFn,
-    WindowFocusFn,
+    AtBottomFn, Cursor, DndSourceSpec, DndTargetSpec, DragEndFn, DragFn, DragOutFn, DropSpec,
+    LanguagesFn, LayoutFn, LayoutTxFn, ModalSpec, PasteFn, PointerFn, PressFn, ScrollOffsetFn,
+    SelectionChangeFn, SelectionCopy, VisibleRowsFn, WindowFocusFn,
 };
 
 #[derive(Clone)]
@@ -37,6 +37,8 @@ pub(crate) struct Handlers {
     pub press_on_down: bool,
     pub on_drag_start: Option<PressFn>,
     pub on_drag_end: Option<DragEndFn>,
+    pub dnd_source: Option<Box<DndSourceSpec>>,
+    pub dnd_target: Option<Box<DndTargetSpec>>,
     pub drop: Option<Box<DropSpec>>,
     pub on_at_bottom: Option<AtBottomFn>,
     /// `on_far_from_bottom`: its least distance, the key of the frame whose height counts in
@@ -84,6 +86,7 @@ impl Handlers {
             || self.on_hover.is_some()
             || self.on_drag.is_some()
             || self.drag_out.is_some()
+            || self.dnd_source.is_some()
     }
 
     #[inline]
@@ -97,6 +100,7 @@ impl Handlers {
             || self.on_hover_change.is_some()
             || self.on_drag.is_some()
             || self.drag_out.is_some()
+            || self.dnd_source.is_some()
             || self.modal.is_some()
             || self.gestures.as_ref().is_some_and(|g| g.takes_gestures())
     }
@@ -125,6 +129,8 @@ impl Empty for Handlers {
         press_on_down: false,
         on_drag_start: None,
         on_drag_end: None,
+        dnd_source: None,
+        dnd_target: None,
         drop: None,
         on_at_bottom: None,
         on_far_from_bottom: None,

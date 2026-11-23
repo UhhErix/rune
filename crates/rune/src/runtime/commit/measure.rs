@@ -92,6 +92,8 @@ impl RuntimeCore {
             hold_windows,
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
+            active_drag: self.pointer.dnd.active(),
+            dnd_preview: self.pointer.dnd.preview_el(app.states_ref()),
         };
         (m, &mut self.text)
     }
@@ -170,7 +172,10 @@ impl Measurement<'_> {
     /// The app's view, or with the playground attached, the view it composes (the bar, or the
     /// playground around its stage).
     fn root_view(&self, cx: cx::CxCore) -> (El, cx::CxCore) {
-        let (root, cx) = self.app.view(cx, self.viewport);
+        let (mut root, cx) = self.app.view(cx, self.viewport);
+        if let Some(preview) = &self.dnd_preview {
+            root = root.child(preview.clone());
+        }
         // The Windows caption buttons go over everything the view drew, in a frame around it.
         let Some(caption) = &self.caption else { return (root, cx) };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
@@ -475,6 +480,7 @@ impl Measurement<'_> {
             caret_read: std::cell::Cell::new(false),
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
+            active_drag: this.active_drag.clone(),
         };
         let mut keep_windows = true;
         loop {
