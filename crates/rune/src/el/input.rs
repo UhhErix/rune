@@ -35,6 +35,9 @@ pub struct InputSpec {
     pub(crate) paste: Option<InputPasteFn>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
     pub(crate) spellcheck: bool,
+    /// `El::spellcheck_ranges` / `El::spellcheck_with`: app-supplied byte ranges in `edit.text`
+    /// marked with Rune's native spelling underline.
+    pub(crate) spellcheck_ranges: Option<Vec<(usize, usize)>>,
     /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
     pub(crate) selection_style: Option<SelectionStyle>,
 }
@@ -97,6 +100,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         change: None,
         paste: None,
         spellcheck: false,
+        spellcheck_ranges: None,
         selection_style: None,
     }));
     e.sync_input_pills();
@@ -225,3 +229,7 @@ impl El {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "multiline_tests.rs"]
+mod multiline_tests;
