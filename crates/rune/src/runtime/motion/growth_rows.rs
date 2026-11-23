@@ -22,7 +22,7 @@ impl RuntimeCore {
         for (cid, stack) in &self.motion.stacks {
             let Some(&ci) = self.tree.node_index.get(cid) else { continue };
             let Some(spec) = self.tree.nodes[ci].growth.as_deref().copied() else { continue };
-            let origin = self.commit.virtuals.get(&self.tree.nodes[ci].path).map_or(0.0, |v| v.before);
+            let origin = self.commit.virtuals.get(&self.tree.nodes[ci].path).filter(|v| !v.horizontal).map_or(0.0, |v| v.before);
             self.paint.row_dy[ci] = grid(origin, s);
             let mut y = stack.pad_top - origin;
             let mut first_row = true;

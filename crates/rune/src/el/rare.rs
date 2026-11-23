@@ -41,6 +41,8 @@ pub(crate) struct ElCold {
     pub(crate) scroll_edges: ScrollEdges,
     pub(crate) growth: Option<Box<GrowthSpec>>,
     pub(crate) virtual_estimate: Option<f32>,
+    /// True when the virtual list windows horizontally (`El::virtualize_x` / `El::virtual_cols`).
+    pub(crate) virtual_horizontal: bool,
     /// Rows `El::virtual_rows` builds at layout time, in place of `children`.
     pub(crate) virtual_rows: Option<Rc<crate::el::virtual_rows::RowSource>>,
     /// [`El::virtual_rows_version`](crate::El::virtual_rows_version), hashed.
@@ -99,6 +101,7 @@ impl Empty for ElCold {
         scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
         growth: None,
         virtual_estimate: None,
+        virtual_horizontal: false,
         virtual_rows: None,
         virtual_rows_version: None,
         virtual_rows_append_only: false,

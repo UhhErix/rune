@@ -228,7 +228,7 @@ impl RuntimeCore {
                 .take_while(|&p| p != s)
                 .find_map(|r| {
                     let c = self.tree.nodes[r].parent?;
-                    self.commit.virtuals.contains_key(&self.tree.nodes[c].path).then(|| (
+                    self.commit.virtuals.get(&self.tree.nodes[c].path).is_some_and(|v| !v.horizontal).then(|| (
                         self.tree.nodes[c].path.clone(),
                         self.tree.nodes[r].key.clone().unwrap_or_default(),
                         self.tree.nodes[i].target[1] - self.tree.nodes[r].target[1],

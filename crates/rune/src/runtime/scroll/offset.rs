@@ -146,7 +146,7 @@ impl RuntimeCore {
             return Some((v, to));
         }
         self.tree.nodes.iter().find_map(|n| {
-            let list = self.commit.virtuals.get(&n.path)?;
+            let list = self.commit.virtuals.get(&n.path).filter(|v| !v.horizontal)?;
             // A row that isn't mounted stands where the estimates put it; the jump mounts it and
             // `scroll_to_offsets` places `mark` once it has.
             let index = list.index_of(key).or_else(|| list.index_of(key.split_once('/')?.0))?;
@@ -296,6 +296,19 @@ impl ScrollState {
         self.offset = (self.offset + delta).max(0.0);
         if let ScrollMode::Glide { to: GlideTo::Offset(to) | GlideTo::ShrunkEnd(to), .. } = &mut self.mode {
             *to = (*to + delta).max(0.0);
+        }
+    }
+
+    /// Shifts the horizontal offset by `delta` points when content before a horizontal virtual
+    /// strip's anchor changed width, carrying a running glide or wheel curve along with it.
+    pub(in crate::runtime) fn shift_anchor_x(&mut self, delta: f32) {
+        if delta == 0.0 { return; }
+        let delta = f64::from(delta);
+        self.x.offset = (self.x.offset + delta).max(0.0);
+        match &mut self.x.motion {
+            XMotion::Glide { aim, .. } => *aim = (*aim + delta).max(0.0),
+            XMotion::Wheel(curve) => curve.follow(self.x.offset),
+            _ => {}
         }
     }
 
