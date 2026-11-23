@@ -95,12 +95,42 @@ jobs:
 
           # `--empty=drop` (together with git rebase's default patch-id skipping) drops any
           # fork commit whose feature has already landed in upstream/dev.
+          # Generated DX12 bytecode and its hashes conflict whenever upstream and a fork commit both
+          # touch the shaders: take upstream's copy while rebasing, then regenerate once at the end.
+          $generated = '(\.dxbc|dxbc_hash\.rs|dxbc_pinned_hash\.rs|pass_dxbc_hash\.rs)$'
+          $env:GIT_EDITOR = 'true'
+          $regen = $false
           git rebase --empty=drop upstream/dev 2>&1 | Tee-Object -FilePath $logFile -Append
-          if ($LASTEXITCODE -ne 0) {
+          $rebaseExit = $LASTEXITCODE
+          for ($step = 0; $rebaseExit -ne 0 -and $step -lt 50; $step++) {
+            $conflicts = @(git diff --name-only --diff-filter=U)
+            $other = @($conflicts | Where-Object { $_ -notmatch $generated })
+            if ($conflicts.Count -eq 0 -or $other.Count -gt 0) { break }
+            foreach ($f in $conflicts) {
+              git checkout --ours -- $f
+              git add -- $f
+            }
+            $regen = $true
+            git rebase --continue 2>&1 | Tee-Object -FilePath $logFile -Append
+            $rebaseExit = $LASTEXITCODE
+          }
+          if ($rebaseExit -ne 0) {
             git status --short 2>&1 | Tee-Object -FilePath $logFile -Append
             git rebase --abort 2>$null
             Report-Blocked -Stage 'rebase' -UpstreamSha $upstreamShort
             exit 1
+          }
+          if ($regen) {
+            cargo run --locked -p rune --example regen_dxbc 2>&1 | Tee-Object -FilePath $logFile -Append
+            if ($LASTEXITCODE -ne 0) {
+              Report-Blocked -Stage 'regen_dxbc' -UpstreamSha $upstreamShort
+              exit 1
+            }
+            git add -A crates
+            git diff --cached --quiet
+            if ($LASTEXITCODE -ne 0) {
+              git commit -m "chore(exo): regenerate DX12 uber bytecode after sync onto $upstreamShort" 2>&1 | Tee-Object -FilePath $logFile -Append
+            }
           }
 
           # Run Rune's core crate test suite (matching .github/workflows/macos-tests.yml and AGENTS.md).
