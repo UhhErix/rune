@@ -95,6 +95,22 @@ impl El {
     pub fn decorations(self, spans: impl Into<Vec<Span>>) -> Self {
         self.spans(spans)
     }
+    /// Computes per-frame [`Span`] decorations from the element's authored text (`edit.text` on a
+    /// [`text_input`], or `content` on a [`text`]/[`rich`] element), for markdown or syntax
+    /// highlighting. On a [`text_input`], byte offsets shift automatically across IME preedit and
+    /// `f` is skipped on [`El::secure`] fields.
+    pub fn spans_with(self, f: impl FnOnce(&str) -> Vec<Span>) -> Self {
+        let spans = if let Some(inp) = self.cold.input.as_deref() {
+            if inp.edit.is_secure() { return self; }
+            f(&inp.edit.text)
+        } else if let Some(t) = &self.text {
+            if t.redacted { return self; }
+            f(&t.content)
+        } else {
+            return self;
+        };
+        self.spans(spans)
+    }
     /// An inset `color` border ring `width` points wide inside the rounded [`Span::bg`] of bytes
     /// `start..end`. Touching runs of the range on one line share one ring; wrapped lines each
     /// get their own. No background means no ring. Later overlapping rings win.
@@ -491,6 +507,28 @@ impl El {
             i.spellcheck = on;
         }
         self
+    }
+    /// Underline specific UTF-8 byte ranges `(start, end)` in a [`text_input`]'s authored text
+    /// with Rune's native spelling marker (for custom or markdown-aware spellcheckers).
+    /// Ignored on [`El::secure`] fields.
+    pub fn spellcheck_ranges(mut self, ranges: impl Into<Vec<(usize, usize)>>) -> Self {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut())
+            && !i.edit.is_secure()
+        {
+            let ranges: Vec<_> = ranges.into().into_iter().filter(|&(a, b)| a < b).collect();
+            i.spellcheck_ranges = (!ranges.is_empty()).then_some(ranges);
+        }
+        self
+    }
+    /// Callback hook that computes misspelled UTF-8 byte ranges from a [`text_input`]'s authored
+    /// text and paints Rune's native spelling underline under each range. Skipped when
+    /// [`El::secure`] is active.
+    pub fn spellcheck_with(self, f: impl FnOnce(&str) -> Vec<(usize, usize)>) -> Self {
+        let ranges = match self.cold.input.as_deref() {
+            Some(i) if !i.edit.is_secure() => f(&i.edit.text),
+            _ => return self,
+        };
+        self.spellcheck_ranges(ranges)
     }
     pub fn placeholder(mut self, s: impl Into<String>, c: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {

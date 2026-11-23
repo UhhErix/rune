@@ -436,30 +436,44 @@ impl RuntimeCore {
                         }
                     }
                 }
-                // Misspelled words (`El::spellcheck`), but the one the caret is typing.
-                if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
-                    // Windows and the web check word by word, so the paragraphs shown are checked
-                    // alone: a 20,000-line draft hashes and walks only what's on screen. macOS
-                    // finds each text's language from the whole of it.
-                    let (from, to) = (shown_a.min(e.text.len()), shown_b.min(e.text.len()));
-                    let found = if cfg!(any(target_os = "windows", target_arch = "wasm32")) && (from > 0 || to < e.text.len()) && e.text.is_char_boundary(from) && e.text.is_char_boundary(to) {
-                        std::rc::Rc::new(crate::spell::misspelled(&e.text[from..to], Some(self.frame.live.waker())).iter().map(|&(a, b)| (a + from, b + from)).collect::<Vec<_>>())
-                    } else {
-                        crate::spell::misspelled(&e.text, Some(self.frame.live.waker()))
-                    };
-                    // The word typing left the caret in waits unmarked until the pause ends (`spell::pause`).
-                    // Typing shows in the paragraphs shown, the caret's among them.
-                    let watched = if e.text.is_char_boundary(from) && e.text.is_char_boundary(to) { &e.text[from..to] } else { e.text.as_str() };
-                    let caret = if e.focused { crate::spell::pause::observe(&mut self.edit.spell_watch, &n.path, watched, e.range(), self.clock) } else { None };
+                // Misspelled words (`El::spellcheck` and custom `El::spellcheck_ranges`), skipping
+                // the word the caret is actively typing for platform spellcheck.
+                if (inp.spellcheck || inp.spellcheck_ranges.is_some()) && !e.is_secure() && e.preedit().is_none() && !departing {
                     let color = premul(SPELLING, o, srgb);
-                    for &(a, b) in found.iter().filter(|&&(a, b)| caret.is_none_or(|c| c < a || c > b)) {
+                    let draw_marker = |a: usize, b: usize, instances: &mut Vec<Instance>| {
+                        let a = a.min(e.text.len());
+                        let b = b.min(e.text.len());
+                        if a >= b { return; }
                         let (da, db) = e.display_selection_range(a, b);
-                        if db < shown_a || da > shown_b { continue; }
+                        if db < shown_a || da > shown_b { return; }
                         for (bb, baseline) in flow.range_boxes(da, db, false) {
                             // Its top a point under the baseline, as Chromium's.
                             let top = origin[1] + (baseline + s) * tk;
                             let (x0, x1) = (origin[0] + bb.x0 as f32 * tk, origin[0] + bb.x1 as f32 * tk);
-                            push_spelling_marker(&mut self.instances, x0, x1, top, s * tk, color, clip, fade);
+                            push_spelling_marker(instances, x0, x1, top, s * tk, color, clip, fade);
+                        }
+                    };
+                    if inp.spellcheck {
+                        // Windows and the web check word by word, so the paragraphs shown are checked
+                        // alone: a 20,000-line draft hashes and walks only what's on screen. macOS
+                        // finds each text's language from the whole of it.
+                        let (from, to) = (shown_a.min(e.text.len()), shown_b.min(e.text.len()));
+                        let found = if cfg!(any(target_os = "windows", target_arch = "wasm32")) && (from > 0 || to < e.text.len()) && e.text.is_char_boundary(from) && e.text.is_char_boundary(to) {
+                            std::rc::Rc::new(crate::spell::misspelled(&e.text[from..to], Some(self.frame.live.waker())).iter().map(|&(a, b)| (a + from, b + from)).collect::<Vec<_>>())
+                        } else {
+                            crate::spell::misspelled(&e.text, Some(self.frame.live.waker()))
+                        };
+                        // The word typing left the caret in waits unmarked until the pause ends (`spell::pause`).
+                        // Typing shows in the paragraphs shown, the caret's among them.
+                        let watched = if e.text.is_char_boundary(from) && e.text.is_char_boundary(to) { &e.text[from..to] } else { e.text.as_str() };
+                        let caret = if e.focused { crate::spell::pause::observe(&mut self.edit.spell_watch, &n.path, watched, e.range(), self.clock) } else { None };
+                        for &(a, b) in found.iter().filter(|&&(a, b)| caret.is_none_or(|c| c < a || c > b)) {
+                            draw_marker(a, b, &mut self.instances);
+                        }
+                    }
+                    if let Some(custom) = &inp.spellcheck_ranges {
+                        for &(a, b) in custom {
+                            draw_marker(a, b, &mut self.instances);
                         }
                     }
                 }
