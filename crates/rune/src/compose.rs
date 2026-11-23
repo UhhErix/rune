@@ -146,8 +146,13 @@ impl<S: 'static> Frame<'_, S> {
         let clear = self.rt.clear_color();
         self.ui.set_fade_stops(self.rt.fade_stops());
         self.ui.set_max_backdrop_blurs(self.rt.max_backdrop_blurs());
+        self.ui.set_liquid_glass(self.rt.liquid_glass_frame());
         self.ui.prepare_ui(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
         self.ui.draw(self.encoder, self.target, clear);
+        let probes = self.ui.poll_glass_probes(self.device);
+        if !probes.is_empty() {
+            self.rt.apply_glass_probes(&probes, self.dt as f32);
+        }
     }
 }
 

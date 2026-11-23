@@ -182,6 +182,7 @@ impl Renderer {
     pub(super) fn redraws_in_place(&self) -> Drawn {
         if !self.effects.is_empty() { return Err("effect"); }
         if self.has_backdrop_blur() { return Err("backdrop blur"); }
+        if self.has_liquid_glass() { return Err("liquid glass"); }
         if self.springs.is_some() { return Err("springs"); }
         if !self.layers.in_place() { return Err("layer"); }
         if self.surfaces.as_ref().is_some_and(|s| !s.draws_nothing()) { return Err("surface"); }

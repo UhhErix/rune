@@ -51,7 +51,7 @@ fn movable(kind: Option<Kind>) -> bool {
             Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
             | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial,
         ) => true,
-        Some(Kind::Segment | Kind::Triangle | Kind::Effect | Kind::BackdropBlur) | None => false,
+        Some(Kind::Segment | Kind::Triangle | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass) | None => false,
     }
 }
 
@@ -215,7 +215,7 @@ fn rows_alike(i: &Instance, r: [f32; 4]) -> bool {
         Some(
             Kind::Glyph | Kind::Inset | Kind::Gradient | Kind::Segment | Kind::Triangle
             | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial
-            | Kind::Effect | Kind::BackdropBlur,
+            | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass,
         ) | None => false,
     };
     alike && clip_rows_alike(&Clip::of(i), r)

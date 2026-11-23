@@ -432,6 +432,7 @@ pub(super) fn encode_gpu_frame(
         let rt = app.rt_mut();
         side.renderer.set_fade_stops(rt.fade_stops());
         side.renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
+        side.renderer.set_liquid_glass(rt.liquid_glass_frame());
         side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, prepared.size);
         side.renderer.draw_armed(&mut prepared.encoder, &prepared.frame.texture);
         false

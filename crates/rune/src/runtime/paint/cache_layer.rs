@@ -203,6 +203,7 @@ impl RuntimeCore {
                     || self.subtree_exiting(i)
                     || (!self.motion.flights().is_empty() && self.motion.flights().iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
                     || n.vis.effect.is_some()
+                    || n.vis.liquid_glass.is_some()
                     // A publication or animation frame can replace texels without moving the
                     // atlas slot, so identical image primitives do not imply identical raster contents.
                     || n.vis.pixels.is_some()

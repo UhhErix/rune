@@ -52,6 +52,11 @@ pub(in crate::runtime) fn prop_name(id: u16) -> &'static str {
         90..=93 => "shadow",
         94 => "group-rest",
         95 => "trim",
+        96 => "glass-press",
+        97 => "glass-hover-x",
+        98 => "glass-hover-y",
+        99 => "glass-glow",
+        100 => "glass-materialize",
         _ => "custom",
     }
 }
@@ -64,6 +69,17 @@ pub(in crate::runtime) const P_SCALE: Prop<f32> = Prop::custom(89, PropClass::Sc
 pub(in crate::runtime) const P_GROUP_REST: Prop<f32> = Prop::custom(94, PropClass::Opacity);
 /// `El::live_trim`'s presented span of a shape's strokes, start and end as 0…1 fractions.
 pub(in crate::runtime) const P_TRIM: Prop<rune_motion::Vec2> = Prop::custom(95, PropClass::Other);
+/// Interactive Liquid Glass press spring (0..1, response 0.21 s, damping 0.6; reduced motion clamps
+/// bounce to 0 via `apple::press_spring(true)`).
+pub(in crate::runtime) const P_GLASS_PRESS: Prop<f32> = Prop::custom(96, PropClass::Other);
+/// Interactive Liquid Glass horizontal hover swell spring (`HOVER_X`: ω=17, ζ=0.42).
+pub(in crate::runtime) const P_GLASS_HOVER_X: Prop<f32> = Prop::custom(97, PropClass::Scale);
+/// Interactive Liquid Glass vertical hover swell spring (`HOVER_Y`: ω=12, ζ=0.34).
+pub(in crate::runtime) const P_GLASS_HOVER_Y: Prop<f32> = Prop::custom(98, PropClass::Scale);
+/// Interactive Liquid Glass touch glow expansion spring (0..1).
+pub(in crate::runtime) const P_GLASS_GLOW: Prop<f32> = Prop::custom(99, PropClass::Opacity);
+/// Liquid Glass unmatched materialize ramp (0..1).
+pub(in crate::runtime) const P_GLASS_MATERIALIZE: Prop<f32> = Prop::custom(100, PropClass::Opacity);
 /// The first four shadows' geometry: x, y, blur and spread in a rect's lanes.
 pub(in crate::runtime) const P_SHADOW_GEO: [Prop<rune_motion::Rect>; 4] = [
     Prop::custom(90, PropClass::Shape),

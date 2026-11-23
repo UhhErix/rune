@@ -300,6 +300,7 @@ fn headless_core(
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &core.surfaces, (w, h));
             renderer.set_fade_stops(core.fade_stops());
             renderer.set_max_backdrop_blurs(core.max_backdrop_blurs());
+            renderer.set_liquid_glass(core.liquid_glass_frame());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut core.text.atlas, &core.instances, (w, h));
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             renderer.draw(&mut enc, &target.view, core.clear_color());

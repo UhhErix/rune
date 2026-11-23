@@ -432,7 +432,7 @@ impl RuntimeCore {
         let mut ok = painted_ok;
         for q in &self.instances[start..] {
             let kind = q.params[1];
-            if kind == KIND_IMAGE || kind == KIND_EFFECT || kind == crate::render::KIND_BACKDROP_BLUR || (kind == KIND_GLYPH && q.radii[3] > 0.0) {
+            if kind == KIND_IMAGE || kind == KIND_EFFECT || kind == crate::render::KIND_BACKDROP_BLUR || kind == crate::render::KIND_LIQUID_GLASS || (kind == KIND_GLYPH && q.radii[3] > 0.0) {
                 ok = false;
             } else if kind == KIND_GLYPH {
                 let (page, texels) = (q.params[2] as u16, (q.rect[2] * if q.radii[0] == 1.0 { 3.0 } else { 1.0 } * q.rect[3]) as u32);
@@ -583,7 +583,7 @@ fn own_key(rt: &RuntimeCore, i: usize) -> u64 {
 fn static_ok(n: &Node) -> bool {
     n.input.is_none() && !n.ime_cursor && n.scroll.is_none() && n.looping.is_none() && n.live.is_empty()
         && n.vis.surface.is_none() && n.material.is_none() && !n.vis_flags.cache() && !n.vis_flags.raise()
-        && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none()
+        && n.vis.backdrop_blur <= 0.0 && n.vis.liquid_glass.is_none() && n.vis.effect.is_none() && n.vis.pixels.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
         && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none()

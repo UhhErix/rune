@@ -106,9 +106,11 @@ pub use el::Cycle;
 pub use el::Direction;
 pub use el::Drag;
 pub use el::El;
+pub use el::GlassPolicy;
 pub use el::GridRow;
 pub use el::GrowthSpec;
 pub use el::{InlineIcon, InlineImage};
+pub use el::LiquidGlass;
 pub use el::LiveRegion;
 pub use el::Outline;
 #[doc(hidden)]

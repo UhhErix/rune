@@ -145,7 +145,7 @@ fn draws(q: &Instance, apron: bool) -> Vec<Draw> {
                 out.push(Draw { outer: meet(grow(outer, d), window), hole, density: 1.0 / 3.0, color: q.fill, bottom: None });
             }
         }
-        Some(Kind::Inset | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur) | None => {}
+        Some(Kind::Inset | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass) | None => {}
     }
     out
 }

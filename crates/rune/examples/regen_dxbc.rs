@@ -138,6 +138,30 @@ fn main() {
 
     drop(logged);
 
+    // Liquid Glass: its down + probe passes (`vs`, `fs_down`, `fs_probe`) and composite (`vs`, `fs`).
+    let start = HLSL.lock().unwrap().len();
+    renderer.make_liquid_glass(&gpu.device);
+    let logged = HLSL.lock().unwrap();
+    let named_lg = |name: &str| logged[start..].iter().filter(|text| text.starts_with(&format!("Naga generated shader for \"{name}\""))).map(|text| text.split_once(":\n").unwrap().1.to_owned()).collect::<Vec<_>>();
+    let (lg_vs, lg_down, lg_probe, lg_fs) = (named_lg("vs"), named_lg("fs_down"), named_lg("fs_probe"), named_lg("fs"));
+    assert!(lg_vs.len() >= 2 && lg_down.len() == 1 && lg_probe.len() == 1 && lg_fs.len() == 1,
+        "liquid glass logged {} vs, {} fs_down, {} fs_probe, {} fs", lg_vs.len(), lg_down.len(), lg_probe.len(), lg_fs.len());
+    let lg_stages = [
+        ("liquid_glass_down.vs", fxc(&lg_vs[0], "vs", "vs_5_1")),
+        ("liquid_glass_down.fs_down", fxc(&lg_down[0], "fs_down", "ps_5_1")),
+        ("liquid_glass_down.fs_probe", fxc(&lg_probe[0], "fs_probe", "ps_5_1")),
+        ("liquid_glass.vs", fxc(lg_vs.last().unwrap(), "vs", "vs_5_1")),
+        ("liquid_glass.fs", fxc(&lg_fs[0], "fs", "ps_5_1")),
+    ];
+    for (name, blob) in &lg_stages {
+        std::fs::write(format!("{dxbc_dir}/{name}.dxbc"), blob).unwrap();
+    }
+    let lg_down_wgsl_hash = blake3::hash(read("liquid_glass_down.wgsl").as_bytes()).to_hex();
+    let lg_comp_wgsl_hash = blake3::hash(format!("{}\n{}", read("clip.wgsl"), read("liquid_glass.wgsl")).as_bytes()).to_hex();
+    println!("liquid glass: {} bytes in 5 stages, WGSL {lg_down_wgsl_hash} and {lg_comp_wgsl_hash}", lg_stages.iter().map(|(_, b)| b.len()).sum::<usize>());
+
+    drop(logged);
+
     // rune-media's video pass (native surfaces: browser pages, video frames), written into rune-media.
     let start = HLSL.lock().unwrap().len();
     rune::native_surface::SurfaceRenderer::compile_wgsl_now(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
@@ -158,7 +182,9 @@ fn main() {
          pub(super) const ALPHA_DXBC_WGSL_BLAKE3: &str = \"{alpha_wgsl}\";\n\
          pub(super) const LAYER_BLUR_DXBC_WGSL_BLAKE3: &str = \"{blur_wgsl}\";\n\
          pub(super) const BACKDROP_BLUR_DXBC_WGSL_BLAKE3: &str = \"{blur_wgsl_hash}\";\n\
-         pub(super) const BACKDROP_COMPOSITE_DXBC_WGSL_BLAKE3: &str = \"{composite_wgsl_hash}\";\n")).unwrap();
+         pub(super) const BACKDROP_COMPOSITE_DXBC_WGSL_BLAKE3: &str = \"{composite_wgsl_hash}\";\n\
+         pub(super) const LIQUID_GLASS_DOWN_DXBC_WGSL_BLAKE3: &str = \"{lg_down_wgsl_hash}\";\n\
+         pub(super) const LIQUID_GLASS_COMPOSITE_DXBC_WGSL_BLAKE3: &str = \"{lg_comp_wgsl_hash}\";\n")).unwrap();
 }
 
 #[cfg(not(target_os = "windows"))]

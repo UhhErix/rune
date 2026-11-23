@@ -33,6 +33,11 @@ impl RuntimeCore {
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
         self.paint.materials.clear();
+        let glass_ptr = match self.pointer.pos {
+            Some((px, py)) => [px * s, py * s, 1.0, 0.0],
+            None => [0.0; 4],
+        };
+        self.paint.glass.begin_frame(glass_ptr);
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -110,11 +115,17 @@ impl RuntimeCore {
             // A flight paints outside every ancestor's layer, above the whole window.
             let lift = flying && self.motion.flying.iter().any(|f| f.0 == node_id);
             let raised = (self.tree.nodes[i].vis_flags.raise() || (tree_order && self.paint.is_lifted_anchor(i))) && !lift;
+            let keep_glass_flight = lift
+                && self.tree.nodes[i].vis.liquid_glass.as_deref().is_some_and(|g| g.glass_id.is_some());
             if lift || raised {
                 self.paint.close_all_layers(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), &mut layers, &mut active_cache, &mut glyph_count);
+                if !keep_glass_flight {
+                    self.paint.glass.close_all_containers(&mut self.instances);
+                }
             }
             self.keep_close(Some(node_parent), &mut layers, &mut active_cache, &mut glyph_count);
             self.paint.close_layers_to_parent(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), node_parent, &mut layers, &mut active_cache, &mut glyph_count);
+            self.paint.glass.close_containers_to_parent(&self.tree.nodes, &mut self.instances, node_parent);
             self.keep_open(i, glyph_count, &sel_ranges, &mark_ranges);
             let n = &self.tree.nodes[i];
             let Some(p) = self.scene.presented(n.id) else { continue };
@@ -722,6 +733,8 @@ impl RuntimeCore {
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();
         self.paint.close_all_layers(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), &mut layers, &mut active_cache, &mut glyph_count);
+        self.paint.glass.close_all_containers(&mut self.instances);
+        self.paint.glass.flush_splices(&mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks);
         // A moving chip can enter a stationary pointer. Re-evaluate against this frame's
         // geometry without inventing pointer-move or drag events on animation frames. Tooltips
         // follow the hold this decides.

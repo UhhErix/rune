@@ -319,7 +319,7 @@ fn recolour(new: &Instance, old: &Instance) -> bool {
     let (a, b): (&[u32; INSTANCE_WORDS], &[u32; INSTANCE_WORDS]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
     // The border is a colour only for boxes and gradients (a glyph's names its outline).
     let (border, shading_w) = match new.kind() {
-        Some(Kind::Layer | Kind::LayerEnd | Kind::BackdropBlur | Kind::Effect) | None => return false,
+        Some(Kind::Layer | Kind::LayerEnd | Kind::BackdropBlur | Kind::LiquidGlass | Kind::Effect) | None => return false,
         Some(Kind::Rect) => (true, true),
         Some(Kind::Glyph) => (false, true),
         Some(Kind::Gradient | Kind::Dashed | Kind::Radial) => (true, false),
