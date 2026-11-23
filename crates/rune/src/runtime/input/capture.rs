@@ -253,6 +253,8 @@ pub(in crate::runtime) struct PointerState {
     pub(super) help: crate::runtime::help::HelpState,
     /// Files dragged over the window from another app (`drop_dispatch`).
     pub(super) file_drag: crate::runtime::drop_dispatch::FileDrag,
+    /// In-app pointer drag-and-drop session (`dnd_dispatch`).
+    pub(in crate::runtime) dnd: crate::runtime::dnd_dispatch::PointerDrag,
     pub(in crate::runtime) drag_out_request: Option<crate::drag_out::DragOutStart>,
     /// How OS drags ended, filled by the host's session callbacks between frames.
     pub(in crate::runtime) drag_ends: crate::drag_out::DragEnds,
@@ -284,6 +286,7 @@ impl PointerState {
             hover_hold: Default::default(),
             help: Default::default(),
             file_drag: Default::default(),
+            dnd: Default::default(),
             os_drag: true,
             drag_out_request: None,
             drag_ends: Default::default(),
@@ -302,7 +305,7 @@ impl PointerState {
     /// waits for the release.
     #[inline]
     pub(in crate::runtime) fn captured(&self) -> bool {
-        self.press.is_held() || self.secondary.is_held() || self.tint.path().is_some()
+        self.press.is_held() || self.secondary.is_held() || self.tint.path().is_some() || self.dnd.is_dragging()
     }
 
     #[inline]

@@ -40,6 +40,8 @@ pub(in crate::runtime) enum Action {
     DragEnd(String, crate::DragOutcome),
     /// A file drag from another app moved, left, or dropped (`drop_dispatch`).
     Files(drop_dispatch::FileEvent),
+    /// An in-app pointer drag started, moved, dropped, or cancelled (`dnd_dispatch`).
+    Dnd(dnd_dispatch::DndEvent),
     /// `stage`: a playground step pressed it, for the stage (`Play::press`).
     Key { ev: KeyEvent, repeat: bool, stage: bool },
     KeyUp(KeyEvent),
@@ -184,6 +186,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::VisibleRows(..) => "on_visible_rows",
         Action::ScreenLayout(..) => "on_screen_layout",
         Action::Files(_) => "on_drop_files",
+        Action::Dnd(_) => "on_drop",
         Action::Ime(_) | Action::FinishIme => "a text input's edit",
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
@@ -488,6 +491,7 @@ impl RuntimeCore {
                 true
             }
             Action::Files(event) => self.run_files(app, event, &mut one),
+            Action::Dnd(event) => self.run_dnd(app, event, &mut one),
             Action::Key { ev, repeat, stage } => {
                 if self.kbd.held_gate(None, Some(&ev.key), repeat) { return false; }
                 if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(app, repeat); }

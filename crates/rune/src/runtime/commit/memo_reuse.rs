@@ -300,6 +300,39 @@ fn same_drop(
     }
 }
 
+fn same_dnd_source(
+    a: &Option<Box<crate::el::DndSourceSpec>>,
+    b: &Option<Box<crate::el::DndSourceSpec>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            opt_rc_eq(&x.payload, &y.payload)
+                && opt_rc_eq(&x.preview, &y.preview)
+                && x.preview_offset == y.preview_offset
+        }
+        _ => false,
+    }
+}
+
+fn same_dnd_target(
+    a: &Option<Box<crate::el::DndTargetSpec>>,
+    b: &Option<Box<crate::el::DndTargetSpec>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            x.payload_type == y.payload_type
+                && opt_rc_eq(&x.on_drop, &y.on_drop)
+                && opt_rc_eq(&x.accepts, &y.accepts)
+                && opt_rc_eq(&x.on_hover, &y.on_hover)
+                && opt_rc_eq(&x.on_move, &y.on_move)
+                && opt_rc_eq(&x.on_reject_hover, &y.on_reject_hover)
+        }
+        _ => false,
+    }
+}
+
 fn same_handlers(
     a: &crate::cold::Cold<crate::el::Handlers>,
     b: &crate::cold::Cold<crate::el::Handlers>,
@@ -329,6 +362,8 @@ fn same_handlers(
         press_on_down,
         on_drag_start,
         on_drag_end,
+        dnd_source,
+        dnd_target,
         drop,
         on_at_bottom,
         on_far_from_bottom,
@@ -376,6 +411,8 @@ fn same_handlers(
         && a.press_on_down == *press_on_down
         && opt_rc_eq(&a.on_drag_start, on_drag_start)
         && opt_rc_eq(&a.on_drag_end, on_drag_end)
+        && same_dnd_source(&a.dnd_source, dnd_source)
+        && same_dnd_target(&a.dnd_target, dnd_target)
         && same_drop(&a.drop, drop)
         && opt_rc_eq(&a.on_at_bottom, on_at_bottom)
         && match (&a.on_far_from_bottom, on_far_from_bottom) {

@@ -402,6 +402,8 @@ pub(super) struct Measurement<'a> {
     pub(super) caret_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,
     pub(super) layout_reads: layout_read::LayoutReads,
+    pub(super) active_drag: Option<crate::dnd::ActiveDrag>,
+    pub(super) dnd_preview: Option<El>,
 }
 
 /// Owned result of completed measurement. Scene mutation consumes this once; retries never

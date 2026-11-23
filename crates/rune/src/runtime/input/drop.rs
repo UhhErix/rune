@@ -69,6 +69,7 @@ impl capture::PointerState {
     pub(in crate::runtime) fn forget_drop_targets(&mut self) {
         if let Some(over) = &mut self.file_drag.over { over.aimed = None; }
         self.file_drag.hovered = None;
+        self.dnd.forget_targets();
     }
 
     pub(super) fn drop_hover_key<'a>(&self, node: impl Fn(&str) -> Option<&'a Node>, accepted: bool) -> Option<String> {
