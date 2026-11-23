@@ -106,6 +106,8 @@ impl Renderer {
             backdrops: Vec::new(),
             backdrop_used: false,
             backdrop_blur: None,
+            liquid_glass: None,
+            liquid_glass_frame: super::liquid_glass::LiquidGlassFrame::new(),
             breakers: Default::default(),
             uploads: Default::default(),
             fills: Default::default(),

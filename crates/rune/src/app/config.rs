@@ -18,6 +18,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
     pub(crate) max_backdrop_blurs: usize,
+    pub(crate) glass_policy: crate::GlassPolicy,
     pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) dev_stats: Option<fn() -> String>,
 }
@@ -39,6 +40,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             tab_visits_controls: false,
             srgb_blend: true,
             max_backdrop_blurs: usize::MAX,
+            glass_policy: crate::GlassPolicy::FollowSystem,
             font_smoothing: crate::FontSmoothing::default(),
             dev_stats: None,
         }
@@ -52,6 +54,7 @@ impl crate::runtime::RuntimeCore {
         tab_visits_controls: bool,
         srgb_blend: bool,
         max_backdrop_blurs: usize,
+        glass_policy: crate::GlassPolicy,
         font_smoothing: crate::FontSmoothing,
         dev_stats: Option<fn() -> String>,
     ) {
@@ -59,6 +62,7 @@ impl crate::runtime::RuntimeCore {
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
         self.set_max_backdrop_blurs(max_backdrop_blurs);
+        self.set_glass_policy(glass_policy);
         self.set_font_smoothing(font_smoothing);
         self.host.set_app_stats(dev_stats);
     }
@@ -76,6 +80,7 @@ impl<S: 'static> Runtime<S> {
             tab_visits_controls,
             srgb_blend,
             max_backdrop_blurs,
+            glass_policy,
             font_smoothing,
             dev_stats,
         } = config;
@@ -83,7 +88,7 @@ impl<S: 'static> Runtime<S> {
         self.hooks.on_mods = on_mods;
         self.hooks.on_visibility = on_visibility;
         self.hooks.on_ime = on_ime;
-        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, max_backdrop_blurs, font_smoothing, dev_stats);
+        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, max_backdrop_blurs, glass_policy, font_smoothing, dev_stats);
     }
 }
 

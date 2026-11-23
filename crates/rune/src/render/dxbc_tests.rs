@@ -173,6 +173,19 @@ fn pass_dxbc_is_fresh() {
     assert!(fxc(&up[0], "fs_up", "ps_5_1") == super::BACKDROP_BLUR[2], "backdrop_blur.fs_up.dxbc: {STALE}");
     assert!(fxc(vertices.last().unwrap(), "vs", "vs_5_1") == super::BACKDROP_COMPOSITE[0], "backdrop_composite.vs.dxbc: {STALE}");
     assert!(fxc(&fragments[0], "fs", "ps_5_1") == super::BACKDROP_COMPOSITE[1], "backdrop_composite.fs.dxbc: {STALE}");
+
+    assert_eq!(wgsl_hash(crate::render::liquid_glass::DOWN_WGSL), super::LIQUID_GLASS_DOWN_DXBC_WGSL_BLAKE3, "liquid_glass_down: {STALE}");
+    assert_eq!(wgsl_hash(&crate::render::liquid_glass::composite_shader_wgsl()), super::LIQUID_GLASS_COMPOSITE_DXBC_WGSL_BLAKE3, "liquid_glass: {STALE}");
+    let start = logged_here().len();
+    super::with_dxbc_enabled(false, || renderer.make_liquid_glass(&gpu.device));
+    let logged = logged_here();
+    let (lg_vs, lg_down, lg_probe, lg_fs) = (stages(&logged[start..], "vs"), stages(&logged[start..], "fs_down"), stages(&logged[start..], "fs_probe"), stages(&logged[start..], "fs"));
+    assert!(lg_vs.len() >= 2 && lg_down.len() == 1 && lg_probe.len() == 1 && lg_fs.len() == 1);
+    assert!(fxc(&lg_vs[0], "vs", "vs_5_1") == super::LIQUID_GLASS_DOWN[0], "liquid_glass_down.vs.dxbc: {STALE}");
+    assert!(fxc(&lg_down[0], "fs_down", "ps_5_1") == super::LIQUID_GLASS_DOWN[1], "liquid_glass_down.fs_down.dxbc: {STALE}");
+    assert!(fxc(&lg_probe[0], "fs_probe", "ps_5_1") == super::LIQUID_GLASS_DOWN[2], "liquid_glass_down.fs_probe.dxbc: {STALE}");
+    assert!(fxc(lg_vs.last().unwrap(), "vs", "vs_5_1") == super::LIQUID_GLASS_COMPOSITE[0], "liquid_glass.vs.dxbc: {STALE}");
+    assert!(fxc(&lg_fs[0], "fs", "ps_5_1") == super::LIQUID_GLASS_COMPOSITE[1], "liquid_glass.fs.dxbc: {STALE}");
 }
 
 /// rune-media's video pass (native surfaces): its two stages and the hash of the WGSL they came

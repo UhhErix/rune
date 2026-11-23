@@ -159,6 +159,78 @@ pub(crate) fn increased_contrast() -> bool {
     { false }
 }
 
+/// `RUNE_REDUCE_TRANSPARENCY=1`: [`reduced_transparency`] on, for captures and checks.
+pub(crate) fn reduced_transparency_preset() -> bool {
+    std::env::var_os("RUNE_REDUCE_TRANSPARENCY").is_some_and(|v| v == "1")
+}
+
+/// Whether the system asks apps to reduce transparency: Windows' Personalization > Colors >
+/// Transparency effects (`EnableTransparency == 0`), macOS's Reduce Transparency, or
+/// `RUNE_REDUCE_TRANSPARENCY=1`. Never read in the frame loop; sampled at window open, focus
+/// and settings-change notifications.
+pub(crate) fn reduced_transparency() -> bool {
+    if reduced_transparency_preset() { return true; }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send};
+        // SAFETY: NSWorkspace's shared instance lives for the process; the selector returns an
+        // Objective-C BOOL. Native hosts call on the UI thread.
+        unsafe {
+            let workspace: *mut objc2::runtime::AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let reduced: objc2::runtime::Bool = msg_send![workspace, accessibilityDisplayShouldReduceTransparency];
+            reduced.as_bool()
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\EnableTransparency == 0.
+        // Direct advapi32 import keeps windows-sys features and Cargo.lock unchanged.
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn RegGetValueW(
+                hkey: isize,
+                sub_key: *const u16,
+                value: *const u16,
+                flags: u32,
+                ty: *mut u32,
+                data: *mut u8,
+                cb_data: *mut u32,
+            ) -> i32;
+        }
+        const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as isize;
+        const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
+        const SUB_KEY: &[u16] = &[
+            b'S' as u16, b'o' as u16, b'f' as u16, b't' as u16, b'w' as u16, b'a' as u16, b'r' as u16, b'e' as u16, b'\\' as u16,
+            b'M' as u16, b'i' as u16, b'c' as u16, b'r' as u16, b'o' as u16, b's' as u16, b'o' as u16, b'f' as u16, b't' as u16, b'\\' as u16,
+            b'W' as u16, b'i' as u16, b'n' as u16, b'd' as u16, b'o' as u16, b'w' as u16, b's' as u16, b'\\' as u16,
+            b'C' as u16, b'u' as u16, b'r' as u16, b'r' as u16, b'e' as u16, b'n' as u16, b't' as u16, b'V' as u16, b'e' as u16, b'r' as u16, b's' as u16, b'i' as u16, b'o' as u16, b'n' as u16, b'\\' as u16,
+            b'T' as u16, b'h' as u16, b'e' as u16, b'm' as u16, b'e' as u16, b's' as u16, b'\\' as u16,
+            b'P' as u16, b'e' as u16, b'r' as u16, b's' as u16, b'o' as u16, b'n' as u16, b'a' as u16, b'l' as u16, b'i' as u16, b'z' as u16, b'e' as u16, 0,
+        ];
+        const VALUE: &[u16] = &[
+            b'E' as u16, b'n' as u16, b'a' as u16, b'b' as u16, b'l' as u16, b'e' as u16,
+            b'T' as u16, b'r' as u16, b'a' as u16, b'n' as u16, b's' as u16, b'p' as u16, b'a' as u16, b'r' as u16, b'e' as u16, b'n' as u16, b'c' as u16, b'y' as u16, 0,
+        ];
+        let mut enabled: u32 = 1;
+        let mut size: u32 = std::mem::size_of::<u32>() as u32;
+        // SAFETY: both UTF-16 slices are NUL-terminated; `enabled` holds 4 writable bytes.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                SUB_KEY.as_ptr(),
+                VALUE.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&mut enabled as *mut u32).cast(),
+                &mut size,
+            )
+        };
+        status == 0 && enabled == 0
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { false }
+}
+
 /// The colours a system contrast theme asks every app to paint with (Windows' Contrast themes,
 /// CSS `forced-colors`' system colours), in linear sRGB as Rune's colours are.
 #[derive(Clone, Copy, Debug, PartialEq)]

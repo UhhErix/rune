@@ -25,6 +25,7 @@ impl Renderer {
         let node = Node { x: Track::constant(0.0), y: Track::constant(0.0), opacity: Track::constant(1.0) };
         vec![
             ("backdrop_blur", ms(|| BackdropBlur::new(device, &self.bind_layout).ensure_composite(device, self.format))),
+            ("liquid_glass", ms(|| self.make_liquid_glass(device))),
             ("layer_blur", ms(|| drop(layer_blur::Pipeline::new(device, super::layers::FORMAT)))),
             ("video", ms(|| drop(crate::native_surface::SurfaceRenderer::new(device, self.format)))),
             ("alpha", ms(|| drop(AlphaSurface::new(device, self.format, (16, 16))))),

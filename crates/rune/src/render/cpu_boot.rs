@@ -206,6 +206,7 @@ impl<'a> Scene<'a> {
             Some(Kind::Layer) => { depth += 1; None }
             Some(Kind::LayerEnd) => { depth = depth.saturating_sub(1); None }
             Some(Kind::BackdropBlur) if depth > 0 => Some(NeedsGpu::BackdropBlur),
+            Some(Kind::LiquidGlass) => Some(NeedsGpu::LiquidGlass),
             Some(Kind::Effect) if self.compositor => Some(NeedsGpu::Effect),
             // Slug's rays (coverage 1) have no CPU form; Windfoil's box does (outline::coverage).
             Some(Kind::Glyph) if i.radii[3] > 0.0 && (self.outlines.is_none() || i.border[3] == super::instance::shader_consts::OUTLINE_MODE_SLUG as f32) => Some(NeedsGpu::OutlineGlyph),
@@ -234,6 +235,8 @@ pub enum NeedsGpu {
     TurnedLayer,
     /// A backdrop blur inside a layer (it blurs that layer's target).
     BackdropBlur,
+    /// A Liquid Glass surface (GPU frame 1 shows live glass directly).
+    LiquidGlass,
     /// An effect slot a compositor draws into.
     Effect,
     /// A glyph drawn from its outline with Slug's coverage, or with no outline store at hand.

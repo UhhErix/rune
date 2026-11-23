@@ -22,6 +22,7 @@ fn kind_enum_round_trips_and_rejects_invalid_floats() {
         (Kind::Radial, KIND_RADIAL, 11),
         (Kind::Effect, KIND_EFFECT, 12),
         (Kind::BackdropBlur, KIND_BACKDROP_BLUR, 13),
+        (Kind::LiquidGlass, KIND_LIQUID_GLASS, 14),
     ];
     assert_eq!(all.len(), Kind::COUNT);
     for (kind, constant, num) in all {
@@ -36,8 +37,8 @@ fn kind_enum_round_trips_and_rejects_invalid_floats() {
         assert_eq!(inst.kind(), Some(kind));
     }
     assert_eq!(Kind::from_f32(-0.0), Some(Kind::Rect));
-    assert_eq!(Kind::from_u8(14), None);
-    for bad in [-1.0, -0.5, 0.5, 1.5, 8.5, 9.5, 11.5, 13.5, 14.0, 255.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+    assert_eq!(Kind::from_u8(15), None);
+    for bad in [-1.0, -0.5, 0.5, 1.5, 8.5, 9.5, 11.5, 13.5, 14.5, 15.0, 255.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         assert_eq!(Kind::from_f32(bad), None, "expected None for {bad:?}");
     }
 }
@@ -309,6 +310,7 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
         ("effect_bleed0", Instance { params: [0.0, KIND_EFFECT, 0.0, 1.0], ..base(Kind::Effect, [60.0, 60.0, 40.0, 30.0]) }, false),
         ("effect_bleed16", Instance { params: [0.0, KIND_EFFECT, 16.0, 1.0], ..base(Kind::Effect, [60.0, 60.0, 40.0, 30.0]) }, false),
         ("backdrop_blur", Instance { params: [12.0, KIND_BACKDROP_BLUR, 0.0, 1.0], ..base(Kind::BackdropBlur, [50.0, 50.0, 70.0, 50.0]) }, false),
+        ("liquid_glass", Instance { params: [10.0, KIND_LIQUID_GLASS, 0.0, 1.0], ..base(Kind::LiquidGlass, [50.0, 50.0, 70.0, 50.0]) }, false),
     ];
 
     // Spread of rotated glyphs across angles and aspect ratios.
@@ -377,7 +379,7 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
                      (inst.rect[0] + inst.rect[2] + g).min(inst.clip[2]).min(w as f32).ceil() as i32,
                      (inst.rect[1] + inst.rect[3] + g).min(inst.clip[3]).min(h as f32).ceil() as i32]
                 }
-                Some(Kind::BackdropBlur) => [
+                Some(Kind::BackdropBlur | Kind::LiquidGlass) => [
                     (inst.rect[0] - 1.0).max(inst.clip[0]).max(0.0).floor() as i32,
                     (inst.rect[1] - 1.0).max(inst.clip[1]).max(0.0).floor() as i32,
                     (inst.rect[0] + inst.rect[2] + 1.0).min(inst.clip[2]).min(w as f32).ceil() as i32,
@@ -433,7 +435,7 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
 #[test]
 fn from_f32_and_bounds_handle_edge_floats_and_nans() {
     let reference_from_f32 = |v: f32| -> Option<Kind> {
-        if v.is_nan() || v.fract() != 0.0 || !(0.0..=13.0).contains(&v) {
+        if v.is_nan() || v.fract() != 0.0 || !(0.0..=14.0).contains(&v) {
             return None;
         }
         Kind::from_u8(v as u8)
@@ -478,7 +480,7 @@ fn from_f32_and_bounds_handle_edge_floats_and_nans() {
             ..Instance::zeroed()
         };
         let qb = inst.quad_bounds();
-        let expected_none = matches!(Kind::from_f32(v), Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur))
+        let expected_none = matches!(Kind::from_f32(v), Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass))
             || (Kind::from_f32(v).is_none() && v > 11.5);
         assert_eq!(qb.is_none(), expected_none, "quad_bounds none mismatch for {v:?}");
         if Kind::from_f32(v).is_none() {
@@ -828,6 +830,7 @@ fn shader_consts_and_clip_radii_invariants() {
     assert!(Kind::Radial.as_f32() < sc::UBER_MAX_KIND_THRESHOLD);
     assert!(Kind::Effect.as_f32() > sc::UBER_MAX_KIND_THRESHOLD);
     assert!(Kind::BackdropBlur.as_f32() > sc::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::LiquidGlass.as_f32() > sc::UBER_MAX_KIND_THRESHOLD);
 
     // Analytic checks on WGSL math constants mirrored into Rust.
     assert_eq!(CONTINUOUS_K.to_bits(), sc::CONTINUOUS_K.to_bits());

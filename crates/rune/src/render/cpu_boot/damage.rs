@@ -50,7 +50,7 @@ pub(super) fn instance(scene: &Scene<'_>, bins: &Bins, n: usize) -> u64 {
         Some(Kind::Image) => { h = image(scene, i, h); }
         Some(
             Kind::Rect | Kind::Shadow | Kind::Inset | Kind::Gradient | Kind::Segment
-            | Kind::Triangle | Kind::Dashed | Kind::Radial | Kind::Effect | Kind::BackdropBlur,
+            | Kind::Triangle | Kind::Dashed | Kind::Radial | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass,
         ) | None => {}
     }
     h

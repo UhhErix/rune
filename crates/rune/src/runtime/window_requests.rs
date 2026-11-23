@@ -16,6 +16,14 @@ pub(crate) struct HostState {
     pub(in crate::runtime) system_contrast: Option<crate::SystemContrast>,
     /// What [`Cx::system_increased_contrast`] reports.
     pub(in crate::runtime) system_increased_contrast: bool,
+    /// What [`Cx::system_reduced_transparency`] reports.
+    pub(in crate::runtime) system_reduced_transparency: bool,
+    /// Active Liquid Glass policy (`App::glass`, `Tx::set_glass_policy`).
+    pub(in crate::runtime) glass_policy: crate::GlassPolicy,
+    /// Smoothed backdrop luminance probe state per `El::glass_id`: `(smoothed_l, is_dark)`.
+    pub(in crate::runtime) glass_probes: HashMap<String, (f32, bool)>,
+    /// Snapshot of `is_dark` by `El::glass_id`, shared with `Cx::glass_is_dark`.
+    pub(in crate::runtime) glass_dark: std::rc::Rc<HashMap<String, bool>>,
     pub(in crate::runtime) scroll_bars: system_settings::ScrollBarHost,
     pub(crate) native_overlay: bool,
     /// The window or overlay surface's frame counts, published by its host.
@@ -73,6 +81,10 @@ impl HostState {
             system_accent: crate::SystemAccent::DEFAULT,
             system_contrast: None,
             system_increased_contrast: false,
+            system_reduced_transparency: false,
+            glass_policy: crate::GlassPolicy::FollowSystem,
+            glass_probes: HashMap::default(),
+            glass_dark: std::rc::Rc::new(HashMap::default()),
             scroll_bars: Default::default(),
             native_overlay: false,
             surface_stats: None,

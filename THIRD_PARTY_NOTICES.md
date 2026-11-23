@@ -22,3 +22,12 @@ Built reproducibly from `tools/ratex-math-wasm/` (`scripts/build-math-wasm.sh`):
 - **RaTeX** (`ratex-parser`, `ratex-layout`, `ratex-types`, `ratex-font`, `ratex-lexer` `0.1.16`, `https://github.com/erweixin/RaTeX`) — **MIT License**
 - **unicode-normalization** (`0.1.26`, compiled inside `ratex-math.wasm`, `https://github.com/unicode-rs/unicode-normalization`) — **(MIT OR Apache-2.0) AND Unicode-3.0**
 - **wasmi** (`wasmi`, `wasmi_core`, `wasmi_ir`, `wasmi_collections` `1.1.0`, native host interpreter, `https://github.com/wasmi-labs/wasmi`) — **MIT OR Apache-2.0**
+
+---
+
+## 3. Liquid Glass Shader Math and Spring Tuning (`crates/rune/src/shaders/liquid_glass.wgsl`, `crates/rune/src/render/liquid_glass/apple.rs`)
+
+Portions of the Liquid Glass bevel height-field normal, `ratio^8` refraction profile with smoothstep edge falloff, per-channel chromatic dispersion, `pow 6` Fresnel rim, cursor-leaning rim highlight, backdrop saturation, and hover/press spring parameters are adapted from:
+
+- **liquid-glass** (`https://github.com/bilalgursen/liquid-glass`) — **MIT License**
+

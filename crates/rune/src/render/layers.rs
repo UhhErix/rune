@@ -314,6 +314,7 @@ impl Renderer {
         if all || !self.backdrop_used {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+            if let Some(lg) = &mut self.liquid_glass { lg.give_back(); }
         }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();

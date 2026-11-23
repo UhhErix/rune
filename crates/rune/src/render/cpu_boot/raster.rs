@@ -331,7 +331,7 @@ impl Painter<'_, '_> {
                 self.shaded(i, kind, r, &clip, None);
             }
             Some(Kind::BackdropBlur) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.backdrop(i, r, &clip); }
-            Some(Kind::Effect) | None => {}
+            Some(Kind::Effect | Kind::LiquidGlass) | None => {}
         }
     }
 

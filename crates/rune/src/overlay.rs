@@ -485,6 +485,7 @@ impl OverlayCore {
     ) -> Self {
         let meter = crate::frame::surface_stats::SurfaceMeter::new(name, shared.stats.clone());
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+        rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency());
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
         crate::platform::scroll_bars::watch();

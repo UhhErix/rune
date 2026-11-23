@@ -514,7 +514,7 @@ pub(super) fn boxes(i: &Instance, kind: Kind, p: [f32; 2]) -> [f32; 4] {
             scale4(mix4(i.fill, i.border, t_y()), ring * dash_cov(s, total, [i.uv[0], i.uv[1], i.uv[2]]))
         }
         Kind::Radial => radial(i, p, false),
-        Kind::Glyph | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur => [0.0; 4],
+        Kind::Glyph | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass => [0.0; 4],
     }
 }
 

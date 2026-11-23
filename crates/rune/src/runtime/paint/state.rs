@@ -85,6 +85,8 @@ pub(crate) struct PaintState {
     pub(super) text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
     /// `El::system_material` elements built this frame, in paint order.
     pub(super) materials: Vec<crate::system_material::MaterialDraw>,
+    /// Per-frame Liquid Glass paint state (shape table, open containers, hoisted splices, probes).
+    pub(in crate::runtime) glass: super::glass::GlassPaintState,
     /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
     /// gate's `z-order`).
     pub(super) paint_rank: Option<Vec<u32>>,
@@ -144,6 +146,7 @@ impl PaintState {
             text_rows: HashMap::default(),
             text_quads: HashMap::default(),
             materials: Vec::new(),
+            glass: super::glass::GlassPaintState::new(),
             paint_rank: None,
             icon_aprons: Vec::new(),
             #[cfg(test)]

@@ -21,7 +21,7 @@ impl RuntimeCore {
         ordered: bool,
     ) -> (bool, Option<std::num::NonZeroU64>) {
         stall.end_named("an `update` closure");
-        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
+        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.glass_policy.is_some_and(|p| p != self.host.glass_policy) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.kbd.focus.path().is_some());
         let minimize = if ordered {
@@ -120,6 +120,7 @@ impl RuntimeCore {
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
+        if let Some(policy) = tx.glass_policy.take() { self.set_glass_policy(policy); }
         if let Some(rewind) = tx.rewind.take() { self.motion.set_rewind(rewind); }
         self.latch_focus(tx);
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }

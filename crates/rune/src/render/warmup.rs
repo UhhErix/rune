@@ -2,8 +2,8 @@
 //! device.
 
 use super::{
-    BatchBind, Instance, Kind, Renderer, backdrop_blur, breaker, dxbc, fill, layers, pass::Backdrop,
-    upload, variant,
+    BatchBind, Instance, Kind, Renderer, backdrop_blur, breaker, dxbc, fill, layers, liquid_glass,
+    pass::Backdrop, upload, variant,
 };
 
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
@@ -47,6 +47,8 @@ pub(super) struct WarmRenderer {
     pub(super) backdrops: Vec<Backdrop>,
     pub(super) backdrop_used: bool,
     pub(super) backdrop_blur: Option<backdrop_blur::BackdropBlur>,
+    pub(super) liquid_glass: Option<liquid_glass::LiquidGlassPass>,
+    pub(super) liquid_glass_frame: liquid_glass::LiquidGlassFrame,
     pub(super) breakers: breaker::Breakers,
     pub(super) uploads: upload::Uploads,
     pub(super) fills: std::sync::Mutex<Option<fill::PendingFills>>,
@@ -102,6 +104,8 @@ impl Renderer {
             backdrops,
             backdrop_used,
             backdrop_blur,
+            liquid_glass,
+            liquid_glass_frame,
             breakers,
             uploads,
             fills,
@@ -149,6 +153,8 @@ impl Renderer {
             backdrops,
             backdrop_used,
             backdrop_blur,
+            liquid_glass,
+            liquid_glass_frame,
             breakers,
             uploads,
             fills,
@@ -169,6 +175,7 @@ impl Renderer {
         self.layers.clear_all();
         self.backdrops.clear();
         if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+        if let Some(lg) = &mut self.liquid_glass { lg.give_back(); }
         self.uploads.forget_instances();
         self.uploads.trim();
         self.image_batches.clear();
@@ -224,6 +231,8 @@ impl Renderer {
             backdrops,
             backdrop_used,
             backdrop_blur,
+            liquid_glass,
+            liquid_glass_frame,
             breakers,
             uploads,
             fills,
@@ -268,6 +277,8 @@ impl Renderer {
             backdrops,
             backdrop_used,
             backdrop_blur,
+            liquid_glass,
+            liquid_glass_frame,
             breakers,
             uploads,
             fills,

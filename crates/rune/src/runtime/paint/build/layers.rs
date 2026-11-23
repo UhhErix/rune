@@ -334,14 +334,45 @@ impl RuntimeCore {
         if !open_cache {
             strip_round_mask(clip, &mut own_round);
         }
+        // Open a Liquid Glass container (`El::glass_container` / `El::glass_group`) before its
+        // own glass and descendants paint so all members share one capture and one SDF draw.
+        if let Some(spacing) = n.vis.liquid_glass.as_deref().and_then(|g| g.container_spacing) {
+            self.paint.glass.open_container(i, spacing);
+        }
+        // Liquid Glass (`El::liquid_glass`): uncapped, shared per-epoch capture, hoisted over
+        // ancestor layers (fade, cache, blur, blend) so it samples the real window backdrop.
+        let own_glass = n.vis.liquid_glass.as_deref().and_then(|g| g.glass);
+        let glass_opacity = (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0);
+        let glass_hole = if let Some(glass) = own_glass
+            && !skip_paint
+            && visible
+            && effective_opacity > 0.001
+            && glass_opacity > 0.001
+        {
+            self.paint_liquid_glass(
+                i,
+                glass,
+                ([r[0], r[1], w, h], radii, n.vis_flags.continuous_corners()),
+                (*clip, *fade, *fade_origin),
+                *rounded,
+                sc * s,
+                glass_opacity,
+                effective_opacity,
+                layers,
+            )
+        } else {
+            None
+        };
+        let n = &self.tree.nodes[i];
         // A backdrop blur samples what is drawn before it, so it goes ahead of any layer this
         // element opens (a fade still blurs the window) and of its shadows, which skip it.
-        let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible
+        let blur_hole = (glass_hole.is_none() && n.vis.backdrop_blur > 0.0 && !skip_paint && visible
             && self.paint.frame_backdrop_blurs < self.paint.max_backdrop_blurs()
-            && effective_opacity > 0.001 && paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
+            && effective_opacity > 0.001 && glass_opacity > 0.001)
             .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], radii, n.vis_flags.continuous_corners()),
-                (*clip, *fade, *fade_origin), *rounded, sc * s, (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
+                (*clip, *fade, *fade_origin), *rounded, sc * s, glass_opacity));
         self.paint.frame_backdrop_blurs += blur_hole.is_some() as usize;
+        let blur_hole = glass_hole.or(blur_hole);
         // The packed ABI carries one clip rectangle. Preserve a rectangular cut through
         // a rounded corner on a separate outer scope, never recenter the rounded mask.
         if !skip_paint && let Some((mask, _)) = rounded.or(own_round)

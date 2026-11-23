@@ -95,6 +95,7 @@ pub struct Tx {
     /// Modifier keys held as the handler runs.
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,
+    pub(crate) glass_policy: Option<crate::GlassPolicy>,
     /// `Tx::record_rewind`.
     pub(crate) rewind: Option<Option<crate::rewind::Rewind>>,
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
@@ -609,6 +610,12 @@ impl Tx {
     /// Windows, overlays, the web canvas and headless runs all follow.
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         self.srgb_blend = Some(enabled);
+    }
+
+    /// Switches how [`El::liquid_glass`] resolves (`FollowSystem`, `Glass`, or `Solid`) from
+    /// the next frame, e.g. for an in-app Material preference toggle.
+    pub fn set_glass_policy(&mut self, policy: crate::GlassPolicy) {
+        self.glass_policy = Some(policy);
     }
 
     /// Record this window's presented frames into `rewind` from the next frame, or stop with

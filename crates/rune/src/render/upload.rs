@@ -329,7 +329,7 @@ impl Renderer {
         let layers_kept = false;
         if !layers_kept { self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport); }
         self.sync_resident_caches(&mut atlas.resident_caches);
-        self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.kind() == Some(Kind::BackdropBlur));
+        self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || matches!(i.kind(), Some(Kind::BackdropBlur | Kind::LiquidGlass)));
         if self.backdrop_used {
             self.ensure_backdrop(device, self.format, viewport);
             for index in 0..self.extra.len() {
@@ -340,6 +340,7 @@ impl Renderer {
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);
+        self.prepare_liquid_glass(device, queue, instances, viewport);
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
@@ -443,7 +444,7 @@ impl Renderer {
                 Kind::Rect | Kind::Shadow | Kind::Inset | Kind::Gradient | Kind::Segment
                 | Kind::Triangle | Kind::LayerEnd | Kind::Dashed | Kind::Radial => continue,
                 Kind::Layer => { has_layers = true; continue; }
-                Kind::Effect | Kind::BackdropBlur => { self.effects.push((i as u32, *instance)); continue; }
+                Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass => { self.effects.push((i as u32, *instance)); continue; }
                 Kind::Image => Some(BatchBind::Image(instance.params[0] as usize)),
                 Kind::Glyph => {
                     let g = instance.params[2] as usize;

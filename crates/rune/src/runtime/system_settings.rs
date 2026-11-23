@@ -59,6 +59,40 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(super) fn set_system_reduced_transparency(&mut self, reduced: bool) -> bool {
+        if reduced == self.system_reduced_transparency { return false; }
+        self.system_reduced_transparency = reduced;
+        true
+    }
+
+    #[inline]
+    pub(super) fn set_glass_policy(&mut self, policy: crate::GlassPolicy) -> bool {
+        if policy == self.glass_policy { return false; }
+        self.glass_policy = policy;
+        true
+    }
+
+    /// Updates smoothed backdrop luminance for each `(glass_id, luma)` probe sample. Returns true
+    /// if any shape's `is_dark` state flipped across its hysteresis threshold.
+    pub(super) fn apply_glass_probes(&mut self, samples: &[(String, f32)], dt: f32) -> bool {
+        let mut flipped = false;
+        for (id, sample_l) in samples {
+            let entry = self.glass_probes.entry(id.clone()).or_insert((*sample_l, *sample_l < crate::render::liquid_glass::apple::PROBE_DARK_ENTER));
+            let prev_dark = entry.1;
+            let (next_l, next_dark) = crate::render::liquid_glass::apple::step_probe_luminance(entry.0, prev_dark, *sample_l, dt);
+            *entry = (next_l, next_dark);
+            if next_dark != prev_dark || self.glass_dark.get(id).copied() != Some(next_dark) {
+                flipped = true;
+            }
+        }
+        if flipped {
+            let map: HashMap<String, bool> = self.glass_probes.iter().map(|(k, &(_, d))| (k.clone(), d)).collect();
+            self.glass_dark = std::rc::Rc::new(map);
+        }
+        flipped
+    }
+
+    #[inline]
     pub(super) fn set_system_reduced_motion(&mut self, reduced: bool) -> bool {
         if self.system_reduced_motion == reduced { return false; }
         self.system_reduced_motion = reduced;
@@ -178,6 +212,54 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_increased_contrast(&mut self, on: bool) {
         if self.host.set_system_increased_contrast(on) { self.commit.dirty = true; }
+    }
+    /// What [`Cx::system_reduced_transparency`] reports. Native windows set it from the system as
+    /// they open, gain focus, and when settings change; headless runs keep false.
+    #[inline]
+    pub fn set_system_reduced_transparency(&mut self, reduced: bool) {
+        if self.host.set_system_reduced_transparency(reduced) { self.commit.dirty = true; }
+    }
+    /// Sets the active Liquid Glass policy (`App::glass`, `Tx::set_glass_policy`).
+    #[inline]
+    pub fn set_glass_policy(&mut self, policy: crate::GlassPolicy) {
+        if self.host.set_glass_policy(policy) { self.commit.dirty = true; }
+    }
+    #[inline]
+    pub fn glass_policy(&self) -> crate::GlassPolicy {
+        self.host.glass_policy
+    }
+    #[inline]
+    pub fn system_reduced_transparency(&self) -> bool {
+        self.host.system_reduced_transparency
+    }
+    /// Whether live Liquid Glass is currently active under the configured policy and OS settings.
+    #[inline]
+    pub fn glass_on(&self) -> bool {
+        if self.host.system_contrast.is_some() { return false; }
+        match self.host.glass_policy {
+            crate::GlassPolicy::Glass => true,
+            crate::GlassPolicy::Solid => false,
+            crate::GlassPolicy::FollowSystem => !self.host.system_reduced_transparency && !self.host.system_increased_contrast,
+        }
+    }
+    /// Smoothed backdrop dark/light classification for an element tagged with `El::glass_id(id)`.
+    #[inline]
+    pub fn glass_is_dark(&self, id: &str) -> bool {
+        self.host.glass_dark.get(id).copied().unwrap_or(false)
+    }
+    /// Per-frame Liquid Glass shape table, probe requests and live cursor for `Renderer::set_liquid_glass`.
+    #[inline]
+    pub fn liquid_glass_frame(&self) -> &crate::render::LiquidGlassFrame {
+        &self.paint.glass.frame
+    }
+    /// Feeds asynchronous GPU luminance probe samples `(glass_id, luma)` back into the runtime,
+    /// smoothing with a 150 ms time constant and hysteresis (0.45 / 0.55).
+    pub fn apply_glass_probes(&mut self, samples: &[(String, f32)], dt: f32) -> bool {
+        if self.host.apply_glass_probes(samples, dt) {
+            self.commit.dirty = true;
+            return true;
+        }
+        false
     }
     #[inline]
     pub fn set_system_reduced_motion(&mut self, reduced: bool) {

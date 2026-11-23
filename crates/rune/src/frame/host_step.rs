@@ -623,8 +623,13 @@ pub(crate) fn draw_ui(
 ) {
     renderer.set_fade_stops(rt.fade_stops());
     renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
+    renderer.set_liquid_glass(rt.liquid_glass_frame());
     renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
     renderer.draw(encoder, target, clear);
+    let probes = renderer.poll_glass_probes(&gpu.device);
+    if !probes.is_empty() {
+        rt.apply_glass_probes(&probes, 1.0 / 60.0);
+    }
 }
 
 #[cfg(test)]

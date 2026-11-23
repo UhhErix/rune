@@ -47,6 +47,8 @@ pub enum Kind {
     Effect = 12,
     /// In-window backdrop blur (`KIND_BACKDROP_BLUR`).
     BackdropBlur = 13,
+    /// In-window Liquid Glass (`KIND_LIQUID_GLASS`).
+    LiquidGlass = 14,
 }
 
 const _: () = {
@@ -54,13 +56,14 @@ const _: () = {
     assert!(Kind::Radial.as_f32() < shader_consts::UBER_MAX_KIND_THRESHOLD);
     assert!(Kind::Effect.as_f32() > shader_consts::UBER_MAX_KIND_THRESHOLD);
     assert!(Kind::BackdropBlur.as_f32() > shader_consts::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::LiquidGlass.as_f32() > shader_consts::UBER_MAX_KIND_THRESHOLD);
     assert!(shader_consts::OUTLINE_TEX_WIDTH == crate::text::outline::WIDTH);
     assert!(shader_consts::OUTLINE_HINT_REACH > 0.0);
 };
 
 impl Kind {
     /// Number of defined primitive kinds.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
 
     #[inline]
     pub const fn as_u8(self) -> u8 {
@@ -94,6 +97,7 @@ impl Kind {
             shader_consts::KIND_RADIAL_U8 => Some(Kind::Radial),
             12 => Some(Kind::Effect),
             13 => Some(Kind::BackdropBlur),
+            14 => Some(Kind::LiquidGlass),
             _ => None,
         }
     }
@@ -124,6 +128,7 @@ impl Kind {
         const RADIAL: u32 = slot(Kind::Radial);
         const EFFECT: u32 = slot(Kind::Effect);
         const BACKDROP_BLUR: u32 = slot(Kind::BackdropBlur);
+        const LIQUID_GLASS: u32 = slot(Kind::LiquidGlass);
         let bits = v.to_bits();
         if (bits << 1) == 0 {
             return Some(Kind::Rect);
@@ -142,6 +147,7 @@ impl Kind {
             RADIAL => Some(Kind::Radial),
             EFFECT => Some(Kind::Effect),
             BACKDROP_BLUR => Some(Kind::BackdropBlur),
+            LIQUID_GLASS => Some(Kind::LiquidGlass),
             _ => None,
         }
     }
@@ -201,6 +207,10 @@ pub const KIND_EFFECT: f32 = Kind::Effect.as_f32();
 /// `params.x` is the blur's standard deviation in device pixels and `params.w` the scale in
 /// device pixels per point.
 pub const KIND_BACKDROP_BLUR: f32 = Kind::BackdropBlur.as_f32();
+/// Liquid Glass container composite (`El::liquid_glass`). Rasterized by the Liquid Glass pass
+/// rather than the uber shader: `params = [max_sigma_px, KIND_LIQUID_GLASS, first_shape, k_px]`,
+/// `uv = [shape_count, spacing_px, max_refract_px, group_id]`, `border = still_rgba`, `fill.a = opacity`.
+pub const KIND_LIQUID_GLASS: f32 = Kind::LiquidGlass.as_f32();
 
 /// Uniform block bound at `@group(0) @binding(0)` by `shader.wgsl` and `backdrop_composite.wgsl`.
 #[repr(C)]
@@ -376,16 +386,16 @@ pub fn unpack_clip_radii(w: u32) -> [f32; 4] {
 /// so any `None` with `params[1] > 11.5` always falls outside `0..30`.
 const KIND_NONE: usize = Kind::COUNT;
 
-/// Maps `(bits - 1.0_f32.to_bits()).rotate_left(12)` in `0..30` to `Kind as u8` (`0..14`) or
-/// `KIND_NONE` (`14`). Derived solely from [`Kind::from_u8`] and [`Kind::as_f32`].
-const KIND_SLOT_LUT: [u8; 30] = {
+/// Maps `(bits - 1.0_f32.to_bits()).rotate_left(12)` in `0..31` to `Kind as u8` (`0..15`) or
+/// `KIND_NONE` (`15`). Derived solely from [`Kind::from_u8`] and [`Kind::as_f32`].
+const KIND_SLOT_LUT: [u8; 31] = {
     const ONE: u32 = KIND_SHADOW.to_bits();
-    let mut table = [KIND_NONE as u8; 30];
+    let mut table = [KIND_NONE as u8; 31];
     let mut k = 1u8;
     while (k as usize) < Kind::COUNT {
         let Some(kind) = Kind::from_u8(k) else { panic!("dense Kind discriminants") };
         let slot = kind.as_f32().to_bits().wrapping_sub(ONE).rotate_left(12) as usize;
-        assert!(slot < 30);
+        assert!(slot < 31);
         table[slot] = k;
         k += 1;
     }
@@ -398,7 +408,7 @@ const KIND_SLOT_LUT: [u8; 30] = {
 const fn kind_index_nonzero(bits: u32) -> usize {
     const ONE: u32 = KIND_SHADOW.to_bits();
     let slot = bits.wrapping_sub(ONE).rotate_left(12);
-    if slot < 30 {
+    if slot < 31 {
         KIND_SLOT_LUT[slot as usize] as usize
     } else {
         KIND_NONE
@@ -418,7 +428,7 @@ const fn bits_gt_uber_max(bits: u32) -> bool {
 /// Bitmask of `Kind` indices (`0..=Kind::COUNT`) that draw no uber-shader quad (`quad_bounds` is
 /// `None`, except `KIND_NONE` which only skips when `params[1] > UBER_MAX_KIND_THRESHOLD`).
 const NO_UBER_QUAD_MASK: u32 =
-    (1 << Kind::LayerEnd.as_u8()) | (1 << Kind::Effect.as_u8()) | (1 << Kind::BackdropBlur.as_u8());
+    (1 << Kind::LayerEnd.as_u8()) | (1 << Kind::Effect.as_u8()) | (1 << Kind::BackdropBlur.as_u8()) | (1 << Kind::LiquidGlass.as_u8());
 
 #[derive(Clone, Copy)]
 enum GrowMode {
@@ -430,15 +440,15 @@ enum GrowMode {
 const fn grow_spec(kind: Option<Kind>, mode: GrowMode) -> (f32, f32) {
     match (mode, kind) {
         (GrowMode::Layer | GrowMode::Damage, Some(Kind::Effect)) => (shader_consts::GROW_FLAT, 1.0),
-        (GrowMode::Layer, Some(Kind::BackdropBlur) | None) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
-        (GrowMode::Damage, Some(Kind::BackdropBlur)) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
+        (GrowMode::Layer, Some(Kind::BackdropBlur | Kind::LiquidGlass) | None) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
+        (GrowMode::Damage, Some(Kind::BackdropBlur | Kind::LiquidGlass)) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
         (_, Some(Kind::Shadow)) => (shader_consts::GROW_SHADOW_PAD, shader_consts::GROW_SHADOW_SIGMA),
         (_, Some(Kind::Glyph)) => (shader_consts::GROW_GLYPH, 0.0),
         (_, Some(Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer)) => (shader_consts::GROW_FLAT, 0.0),
         (_, Some(Kind::Rect | Kind::Gradient | Kind::Dashed | Kind::Radial) | None) => {
             (shader_consts::GROW_RECT_PAD, shader_consts::GROW_RECT_SOFT)
         }
-        (_, Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur)) => (0.0, 0.0),
+        (_, Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass)) => (0.0, 0.0),
     }
 }
 
@@ -791,7 +801,7 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
                 Some(
                     Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle
                     | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial
-                    | Kind::Effect | Kind::BackdropBlur,
+                    | Kind::Effect | Kind::BackdropBlur | Kind::LiquidGlass,
                 ) | None => {
                     i.border = i.border.map(|v| v * opacity);
                 }

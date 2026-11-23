@@ -100,6 +100,10 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         }
     }
 
+    pub(super) fn is_owned_splittable(&self) -> bool {
+        self.splittable()
+    }
+
     /// Takes the owned pass out of `self`, leaving it `Parked`; puts a borrowed pass back and
     /// returns `None` for it.
     fn take(&mut self) -> Option<OpenPass<'a, 'p>> {
@@ -283,6 +287,7 @@ impl Renderer {
         });
         let view = texture.create_view(&Default::default());
         if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, format, &view); }
+        if let Some(lg) = &mut self.liquid_glass { lg.bind_backdrop(device, format, &view); }
         if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format) {
             *b = Backdrop { format, texture, view };
         } else {

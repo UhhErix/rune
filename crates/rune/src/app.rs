@@ -176,6 +176,14 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Sets how [`El::liquid_glass`] resolves against the system's Reduce Transparency setting.
+    /// Defaults to [`GlassPolicy::FollowSystem`]; use [`GlassPolicy::Glass`] to keep glass on
+    /// regardless of the OS transparency switch, or [`GlassPolicy::Solid`] for solid `still` fills.
+    pub fn glass(mut self, policy: crate::GlassPolicy) -> Self {
+        self.runtime.glass_policy = policy;
+        self
+    }
+
     /// How this app's windows and overlays rasterise and place glyphs (see [`crate::FontSmoothing`]):
     /// `On` by default on macOS and in a Mac's browser, `WindfoilChromium` elsewhere.
     /// `ConfiguredOverlay::font_smoothing` overrides it per overlay, and

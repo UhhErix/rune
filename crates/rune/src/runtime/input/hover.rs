@@ -358,7 +358,8 @@ impl RuntimeCore {
     /// is over.
     fn hover_flip(&self, i: usize, top: Option<usize>, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.tree.nodes[i];
-        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.subtree_exiting(i) { return None; }
+        let interactive_glass = n.vis.liquid_glass.as_deref().and_then(|g| g.glass).is_some_and(|g| g.interactive);
+        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group() || interactive_glass) || self.subtree_exiting(i) { return None; }
         let inside = self.pointer_hovers(i, top)
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
@@ -407,13 +408,17 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            let interactive_glass = n.vis.liquid_glass.as_deref().and_then(|g| g.glass).is_some_and(|g| g.interactive);
+            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() && !interactive_glass { continue; }
             if self.subtree_exiting(i) { continue; }
             if self.hover_flip(i, top, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
-            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_press() && press_scale.is_none() && !interactive_glass { continue; }
             let down = self.press_down_node(i, captured);
             let id = n.id;
             if n.vis.tracks_press() && self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != down as u8 as f32 {
+                return true;
+            }
+            if interactive_glass && self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != down as u8 as f32 {
                 return true;
             }
             if let Some(k) = press_scale {
@@ -444,10 +449,27 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            let interactive_glass = n.vis.liquid_glass.as_deref().and_then(|g| g.glass).is_some_and(|g| g.interactive);
+            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() && !interactive_glass { continue; }
             if self.subtree_exiting(i) { continue; }
             match self.hover_flip(i, top, captured, alone, &shared) {
-                Some(f) if f.changed => flips.push(f),
+                Some(f) if f.changed => {
+                    if interactive_glass {
+                        let (sx_spring, sy_spring) = crate::render::liquid_glass::apple::hover_springs(self.reduced_motion);
+                        let (tx, ty) = if f.on && !self.reduced_motion {
+                            (crate::render::liquid_glass::apple::HOVER_SWELL_X, crate::render::liquid_glass::apple::HOVER_SWELL_Y)
+                        } else {
+                            (1.0, 1.0)
+                        };
+                        if paint_tracks::ready_from_rest(&mut self.scene, f.id, P_GLASS_HOVER_X, 1.0, tx) {
+                            self.scene.animate(f.id, P_GLASS_HOVER_X, tx, Anim::from(sx_spring));
+                        }
+                        if paint_tracks::ready_from_rest(&mut self.scene, f.id, P_GLASS_HOVER_Y, 1.0, ty) {
+                            self.scene.animate(f.id, P_GLASS_HOVER_Y, ty, Anim::from(sy_spring));
+                        }
+                    }
+                    flips.push(f);
+                }
                 // Default hover animations inherit velocity and have no completion token.
                 // An unchanged target preserves its trajectory in the store already; avoid
                 // dirtying the scene node for that no-op. Custom animations may carry an
@@ -459,13 +481,27 @@ impl RuntimeCore {
                 Some(_) => {}
                 None => {}
             }
-            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_press() && press_scale.is_none() && !interactive_glass { continue; }
             let down = self.press_down_node(i, captured);
             let pressed = down && n.vis.tracks_press();
             let id = n.id;
-            changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
-            if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
-                self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { crate::tok::motion::INSTANT } else { crate::tok::motion::SNAPPY });
+            if n.vis.tracks_press() {
+                changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
+                    self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { crate::tok::motion::INSTANT } else { crate::tok::motion::SNAPPY });
+                }
+            }
+            if interactive_glass {
+                let target = down as u8 as f32;
+                changed |= self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != target;
+                let spring = crate::render::liquid_glass::apple::press_spring(self.reduced_motion);
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_PRESS, 0.0, target) {
+                    self.scene.animate(id, P_GLASS_PRESS, target, Anim::from(spring));
+                }
+                let glow_spring = crate::render::liquid_glass::apple::touch_glow_spring();
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_GLOW, 0.0, target) {
+                    self.scene.animate(id, P_GLASS_GLOW, target, Anim::from(glow_spring));
+                }
             }
             if let Some(k) = press_scale {
                 // Down follows the hand; the release springs back with a little life.

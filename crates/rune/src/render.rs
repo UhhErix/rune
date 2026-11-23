@@ -44,6 +44,7 @@ mod windfoil_metallib;
 pub(crate) mod csd_corners;
 pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
+pub(crate) mod liquid_glass;
 pub(crate) mod surface_alpha;
 pub(crate) mod translucency;
 
@@ -107,12 +108,17 @@ pub use instance::KIND_IMAGE;
 pub use instance::KIND_INSET;
 pub use instance::KIND_LAYER;
 pub use instance::KIND_LAYER_END;
+pub use instance::KIND_LIQUID_GLASS;
 pub use instance::KIND_RADIAL;
 pub use instance::KIND_RECT;
 pub use instance::KIND_SEGMENT;
 pub use instance::KIND_SHADOW;
 pub use instance::KIND_TRIANGLE;
 pub use instance::Kind;
+pub use liquid_glass::GlassProbeRequest;
+pub use liquid_glass::GlassShapeGpu;
+pub use liquid_glass::LiquidGlassFrame;
+pub use liquid_glass::LiquidGlassStats;
 pub use instance::NO_CLIP;
 pub(crate) use instance::STOP_FADE_BIAS;
 pub use instance::pack_clip_radii;
@@ -328,6 +334,10 @@ pub struct Renderer {
     backdrop_used: bool,
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
+    /// Pipelines, shared frost pyramid and luminance probe for Liquid Glass records, built on first use.
+    liquid_glass: Option<liquid_glass::LiquidGlassPass>,
+    /// Per-frame Liquid Glass shape table, probe requests and live cursor state from `set_liquid_glass`.
+    liquid_glass_frame: liquid_glass::LiquidGlassFrame,
     /// Which lazily built pipelines the device took (`breaker`).
     breakers: breaker::Breakers,
     uploads: upload::Uploads,
@@ -493,6 +503,10 @@ impl Renderer {
                 self.draw_backdrop_blur(pass, format, *at, instance, target);
                 continue;
             }
+            if instance.kind() == Some(Kind::LiquidGlass) {
+                self.draw_liquid_glass(pass, format, *at, instance, target);
+                continue;
+            }
             let (origin, size) = self.target_frame(target);
             // Scissor to the slot's clip rectangle, so a compositor that ignores `clip` still
             // stays inside its scroll view or clipped ancestor.
@@ -626,7 +640,7 @@ impl Renderer {
             if self.layer_stats().extra_passes > 0 { t.beginning_of_pass_write_index = None; }
             t
         });
-        let blurs = self.has_backdrop_blur();
+        let blurs = self.has_backdrop_blur() || self.has_liquid_glass();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {

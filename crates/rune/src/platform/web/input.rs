@@ -370,6 +370,7 @@ impl Running {
                 self.resize_surface(window, size, scale);
             }
             Some("motion") => self.app.rt_mut().set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
+            Some("transparency") => self.app.rt_mut().set_system_reduced_transparency(event["reduced"].as_bool().unwrap_or(false)),
             // The primary pointer can or can't hover (a mouse or a touch screen), read by views
             // through `Cx::hover_none`.
             Some("primary_pointer") => {

@@ -70,6 +70,17 @@ const BACKDROP_COMPOSITE: [&[u8]; 2] = [
     include_bytes!("../../shaders/dxbc/backdrop_composite.fs.dxbc"),
 ];
 #[cfg(target_os = "windows")]
+const LIQUID_GLASS_DOWN: [&[u8]; 3] = [
+    include_bytes!("../../shaders/dxbc/liquid_glass_down.vs.dxbc"),
+    include_bytes!("../../shaders/dxbc/liquid_glass_down.fs_down.dxbc"),
+    include_bytes!("../../shaders/dxbc/liquid_glass_down.fs_probe.dxbc"),
+];
+#[cfg(target_os = "windows")]
+const LIQUID_GLASS_COMPOSITE: [&[u8]; 2] = [
+    include_bytes!("../../shaders/dxbc/liquid_glass.vs.dxbc"),
+    include_bytes!("../../shaders/dxbc/liquid_glass.fs.dxbc"),
+];
+#[cfg(target_os = "windows")]
 const LAYER_BLUR_FRAGMENTS: [&[u8]; 5] = [
     include_bytes!("../../shaders/dxbc/layer_blur.fs0.dxbc"),
     include_bytes!("../../shaders/dxbc/layer_blur.fs1.dxbc"),
@@ -266,6 +277,27 @@ pub(super) fn backdrop_blur<T>(device: &wgpu::Device, wgsl: &str, make_pipelines
 pub(super) fn backdrop_composite(device: &wgpu::Device, wgsl: &str) -> Option<Shaders> {
     let fresh = || ABI_MATCHES && compiled_from(wgsl, BACKDROP_COMPOSITE_DXBC_WGSL_BLAKE3, "backdrop blur composite");
     load_modules(device, &[(BACKDROP_COMPOSITE[0], "vs"), (BACKDROP_COMPOSITE[1], "fs")], "backdrop blur composite", fresh, WGSL,
+        |m| Shaders { vertex: m[0].clone(), fragment: m[1].clone() })
+}
+
+/// The Liquid Glass down and probe stages (render/liquid_glass.rs): vertex, `fs_down` and
+/// `fs_probe`, when compiled from `wgsl`.
+#[cfg(target_os = "windows")]
+pub(super) fn liquid_glass_down<T>(device: &wgpu::Device, wgsl: &str, make_pipelines: impl FnOnce(&[wgpu::ShaderModule]) -> T) -> Option<T> {
+    let blobs = [
+        (LIQUID_GLASS_DOWN[0], "vs"),
+        (LIQUID_GLASS_DOWN[1], "fs_down"),
+        (LIQUID_GLASS_DOWN[2], "fs_probe"),
+    ];
+    load_modules(device, &blobs, "liquid glass down", || compiled_from(wgsl, LIQUID_GLASS_DOWN_DXBC_WGSL_BLAKE3, "liquid glass down"), WGSL, make_pipelines)
+}
+
+/// The Liquid Glass composite stages, binding the uber shader's group 0: when compiled from
+/// `wgsl` and for this build's uber layout.
+#[cfg(target_os = "windows")]
+pub(super) fn liquid_glass_composite(device: &wgpu::Device, wgsl: &str) -> Option<Shaders> {
+    let fresh = || ABI_MATCHES && compiled_from(wgsl, LIQUID_GLASS_COMPOSITE_DXBC_WGSL_BLAKE3, "liquid glass composite");
+    load_modules(device, &[(LIQUID_GLASS_COMPOSITE[0], "vs"), (LIQUID_GLASS_COMPOSITE[1], "fs")], "liquid glass composite", fresh, WGSL,
         |m| Shaders { vertex: m[0].clone(), fragment: m[1].clone() })
 }
 

@@ -317,7 +317,8 @@ impl RuntimeCore {
             // A secondary-only child must not obscure primary input or background blur.
             (!self.subtree_exiting(i) && self.pointer_allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
                 || (n.role == "button" && n.vis_flags.hit()) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
-                || self.is_selectable(i))).then_some(i)
+                || self.is_selectable(i)
+                || n.vis.liquid_glass.as_deref().and_then(|g| g.glass).is_some_and(|g| g.interactive))).then_some(i)
         })
     }
 
@@ -408,7 +409,8 @@ impl RuntimeCore {
         let n = &self.tree.nodes[i];
         let hits_before = self.hit.hits_len();
         if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
-            || n.text.as_ref().is_some_and(|t| t.selectable))
+            || n.text.as_ref().is_some_and(|t| t.selectable)
+            || n.vis.liquid_glass.as_deref().and_then(|g| g.glass).is_some_and(|g| g.interactive))
             && !self.subtree_exiting(i)
             && self.pointer_allowed(i) && effective_opacity > 0.001 && visible
         {
