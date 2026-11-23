@@ -638,17 +638,38 @@ impl RuntimeCore {
                 let (i, [x0, _, x1, _]) = self.highlight_target_in(&self.tree.nodes, scope, key)?;
                 (!self.subtree_exiting(i)).then_some((i, x0, (x1 - x0).max(0.0)))
             });
-        let Some((i, target_x, target_w)) = target else { return };
-        let Some(v) = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent)
-            .take_while(|&p| in_scope(&self.tree.nodes[p].path, scope))
-            .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.x()) else { return };
-        let view = &self.tree.nodes[v];
-        // From the viewport's start edge: its right, right to left.
-        let start = match view.flow {
-            crate::el::Flow::Ltr => target_x - view.target[0],
-            crate::el::Flow::Rtl => view.target[2] - (target_x + target_w),
+        let (v, left, width) = if let Some((i, target_x, target_w)) = target {
+            let Some(v) = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent)
+                .take_while(|&p| in_scope(&self.tree.nodes[p].path, scope))
+                .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.x()) else { return };
+            let view = &self.tree.nodes[v];
+            // From the viewport's start edge: its right, right to left.
+            let start = match view.flow {
+                crate::el::Flow::Ltr => target_x - view.target[0],
+                crate::el::Flow::Rtl => view.target[2] - (target_x + target_w),
+            };
+            (v, f64::from(start), f64::from(target_w))
+        } else {
+            let Some(found) = self.tree.nodes.iter().filter(|n| in_scope(&n.path, scope)).find_map(|n| {
+                let vl = self.commit.virtuals.get(&n.path).filter(|vl| vl.horizontal && in_scope(&vl.scroll_path, scope))?;
+                let index = vl.index_of(key).or_else(|| {
+                    key.rmatch_indices('/').find_map(|(at, _)| {
+                        let (row_scope, row_key) = (&key[..at], &key[at + 1..]);
+                        element_path::keyed_suffix_matches(&n.path, row_scope).then(|| vl.index_of(row_key))?
+                    })
+                }).or_else(|| {
+                    key.match_indices('/').find_map(|(at, _)| vl.index_of(&key[..at]))
+                })?;
+                let row_key = &vl.keys[index];
+                let v = *self.tree.node_index.get(self.tree.path_ids.get(&vl.scroll_path)?)?;
+                let left = f64::from(vl.top + vl.pad_top + vl.prefix(index));
+                let width = f64::from(vl.height(row_key));
+                Some((v, left, width))
+            }) else { return };
+            found
         };
-        let (left, width, viewport) = (f64::from(start), f64::from(target_w), f64::from(view.local.w));
+        let view = &self.tree.nodes[v];
+        let viewport = f64::from(view.local.w);
         let (margin, id) = (f64::from(view.scroll_edges.margin), view.id);
         // A vertical reveal may have just mounted rows (virtual ones) that widened the content.
         let max = self.scroll_overflow_x(v).max(0.0);
