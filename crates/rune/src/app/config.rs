@@ -17,6 +17,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
+    pub(crate) max_backdrop_blurs: usize,
     pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) dev_stats: Option<fn() -> String>,
 }
@@ -37,6 +38,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             modifier_keys: false,
             tab_visits_controls: false,
             srgb_blend: true,
+            max_backdrop_blurs: crate::MAX_BACKDROP_BLURS,
             font_smoothing: crate::FontSmoothing::default(),
             dev_stats: None,
         }
@@ -56,6 +58,7 @@ impl<S: 'static> RuntimeConfig<S> {
             modifier_keys,
             tab_visits_controls,
             srgb_blend,
+            max_backdrop_blurs,
             font_smoothing,
             dev_stats,
         } = self;
@@ -67,6 +70,7 @@ impl<S: 'static> RuntimeConfig<S> {
             modifier_keys,
             tab_visits_controls,
             srgb_blend,
+            max_backdrop_blurs,
             font_smoothing,
             dev_stats,
         }
@@ -79,12 +83,14 @@ impl crate::runtime::RuntimeCore {
         modifier_keys: bool,
         tab_visits_controls: bool,
         srgb_blend: bool,
+        max_backdrop_blurs: usize,
         font_smoothing: crate::FontSmoothing,
         dev_stats: Option<fn() -> String>,
     ) {
         self.set_modifier_keys(modifier_keys);
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
+        self.set_max_backdrop_blurs(max_backdrop_blurs);
         self.set_font_smoothing(font_smoothing);
         self.host.set_app_stats(dev_stats);
     }
@@ -101,6 +107,7 @@ impl<S: 'static> Runtime<S> {
             modifier_keys,
             tab_visits_controls,
             srgb_blend,
+            max_backdrop_blurs,
             font_smoothing,
             dev_stats,
         } = config;
@@ -108,7 +115,7 @@ impl<S: 'static> Runtime<S> {
         self.hooks.on_mods = on_mods;
         self.hooks.on_visibility = on_visibility;
         self.hooks.on_ime = on_ime;
-        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, dev_stats);
+        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, max_backdrop_blurs, font_smoothing, dev_stats);
     }
 }
 
@@ -138,6 +145,7 @@ mod tests {
             .modifier_keys()
             .tab_visits_controls(true)
             .srgb_blend(false)
+            .max_backdrop_blurs(12)
             .font_smoothing(FontSmoothing::Off)
             .dev_stats(stats)
     }
@@ -151,6 +159,7 @@ mod tests {
         assert!(rt.hooks.on_ime.is_some());
         assert!(rt.modifier_keys());
         assert!(!rt.srgb_blend());
+        assert_eq!(rt.max_backdrop_blurs(), 12);
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
         assert_eq!(rt.host.app_stats.map(|f| f()).as_deref(), Some("ok"));
 
@@ -176,6 +185,7 @@ mod tests {
     fn runtime_config_defaults_match_app_and_overlay() {
         let cfg = super::RuntimeConfig::<()>::default();
         assert!(cfg.srgb_blend);
+        assert_eq!(cfg.max_backdrop_blurs, crate::MAX_BACKDROP_BLURS);
         assert!(!cfg.modifier_keys && !cfg.tab_visits_controls);
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
         assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.dev_stats.is_none());

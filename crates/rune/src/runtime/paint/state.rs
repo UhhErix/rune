@@ -14,6 +14,7 @@ pub(crate) struct PaintState {
     pub(super) quads_frame: u64,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
     pub(in crate::runtime) srgb_blend: bool,
+    pub(super) max_backdrop_blurs: usize,
     /// The shell shows native views for the first `MAX_NATIVE_MATERIALS` of `materials`; their
     /// elements skip their fill and cut their shadows out of their interior.
     pub(super) native_materials: bool,
@@ -104,6 +105,7 @@ impl PaintState {
             drawn: Vec::new(),
             quads_frame: 0,
             srgb_blend: false,
+            max_backdrop_blurs: crate::MAX_BACKDROP_BLURS,
             native_materials: false,
             videos_active: false,
             animated_icons: false,
@@ -156,6 +158,18 @@ impl PaintState {
     pub(in crate::runtime) fn set_srgb_blend(&mut self, enabled: bool) -> bool {
         let changed = self.srgb_blend != enabled;
         self.srgb_blend = enabled;
+        changed
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn max_backdrop_blurs(&self) -> usize {
+        self.max_backdrop_blurs
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_max_backdrop_blurs(&mut self, max: usize) -> bool {
+        let changed = self.max_backdrop_blurs != max;
+        self.max_backdrop_blurs = max;
         changed
     }
 

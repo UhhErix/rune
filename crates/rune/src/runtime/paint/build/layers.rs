@@ -331,7 +331,7 @@ impl RuntimeCore {
         }
         // A backdrop blur samples what is drawn before it, so it goes ahead of any layer this
         // element opens (a fade still blurs the window) and of its shadows, which skip it.
-        let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible && *backdrop_blurs < crate::MAX_BACKDROP_BLURS
+        let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible && *backdrop_blurs < self.paint.max_backdrop_blurs()
             && effective_opacity > 0.001 && paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
             .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], radii, n.vis_flags.continuous_corners()),
                 (*clip, *fade, *fade_origin), *rounded, sc * s, (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
