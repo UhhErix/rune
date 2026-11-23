@@ -10,7 +10,7 @@ use super::{Decoded, ImageError, Mip, mip_chain};
 
 /// Decoded pixels the frames of one animation may take, mips included; a larger one shows its
 /// first frame still.
-const BUDGET: usize = 256 << 20;
+const BUDGET: usize = 32 << 20;
 
 /// The frames after the first (which is [`Decoded::mips`]) and when each frame ends.
 pub(crate) struct Motion {
@@ -62,8 +62,9 @@ fn sniff(bytes: &[u8]) -> Option<Kind> {
 }
 
 /// An animation of more than one frame, or `None` for a still (or a format that isn't
-/// animated), which decodes as any image does.
-pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
+/// animated), which decodes as any image does. When `max_side > 0`, frames wider or taller
+/// than `max_side` are downscaled proportionally before mip generation.
+pub(super) fn decode_capped(bytes: &[u8], max_side: u32) -> Option<Result<Decoded, ImageError>> {
     let kind = sniff(bytes)?;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let cursor = Cursor::new(bytes);
@@ -96,7 +97,8 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
     };
     let (w, h) = size;
     if w == 0 || h == 0 || w > 8192 || h > 8192 { return Some(Err(ImageError("animation is too large".into()))); }
-    let per_frame = w as usize * h as usize * 16 / 3;
+    let (tw, th) = super::fit_within(w, h, max_side);
+    let per_frame = tw as usize * th as usize * 16 / 3;
     let mut chains = Vec::new();
     let mut ends = Vec::new();
     let mut elapsed = 0.0;
@@ -114,6 +116,12 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
         // can", which would otherwise spin.
         elapsed += if ms <= 10.0 { 0.1 } else { ms / 1000.0 };
         let buffer = frame.into_buffer();
+        let buffer = if max_side > 0 && (buffer.width() > max_side || buffer.height() > max_side) {
+            let (fw, fh) = super::fit_within(buffer.width(), buffer.height(), max_side);
+            image::imageops::resize(&buffer, fw, fh, image::imageops::FilterType::Triangle)
+        } else {
+            buffer
+        };
         match mip_chain(buffer.width(), buffer.height(), buffer.as_raw()) {
             Ok(decoded) => chains.push(decoded.mips),
             Err(e) => return Some(Err(e)),
