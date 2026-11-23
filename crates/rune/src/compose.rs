@@ -145,6 +145,7 @@ impl<S: 'static> Frame<'_, S> {
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();
         self.ui.set_fade_stops(self.rt.fade_stops());
+        self.ui.set_max_backdrop_blurs(self.rt.max_backdrop_blurs());
         self.ui.prepare_ui(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
         self.ui.draw(self.encoder, self.target, clear);
     }

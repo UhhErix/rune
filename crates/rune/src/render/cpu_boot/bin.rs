@@ -189,7 +189,7 @@ impl Bins {
         }
         let mut blurs = Vec::new();
         let mut quiet = vec![false; tiles];
-        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)) {
+        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)).take(scene.max_backdrop_blurs) {
             bounds[n] = super::backdrop::bounds(i, (w, h));
             let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
             for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }

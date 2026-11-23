@@ -123,6 +123,7 @@ impl Renderer {
         Renderer {
             surfaces: None,
             fade_stops: [0.0; 2],
+            max_backdrop_blurs: usize::MAX,
             surfaces_building,
             pipeline,
             format,
@@ -201,6 +202,7 @@ impl Renderer {
         let Renderer {
             surfaces: _,
             fade_stops: _,
+            max_backdrop_blurs: _,
             surfaces_building,
             pipeline,
             format,

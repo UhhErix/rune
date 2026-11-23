@@ -528,6 +528,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             let ort = ov.frame(real_t, step, app_dark);
             if !ort.instances.is_empty() {
                 ui.set_fade_stops(ort.fade_stops());
+                ui.set_max_backdrop_blurs(ort.max_backdrop_blurs());
                 ui.prepare_ui(&gpu.device, &gpu.queue, &mut ort.text.atlas, &ort.instances, (wp, hp));
                 ui.draw_over(&mut enc, &target.view);
             }
