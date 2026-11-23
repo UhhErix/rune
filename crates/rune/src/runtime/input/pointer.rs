@@ -30,6 +30,9 @@ impl RuntimeCore {
             }
         }
         self.refresh_hover(x, y);
+        if self.dnd_pointer_move(app, x, y) {
+            return;
+        }
         let Some(held) = self.pointer.press.held() else { return };
         let (path, d, at, button, is_drag) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some());
         if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
@@ -84,6 +87,7 @@ impl RuntimeCore {
         self.frame.queue.len() != queued
             || self.pointer.press_inside() != capture_inside
             || self.pointer.drag_out_request.is_some()
+            || self.pointer.dnd.is_dragging()
             || self.hovered_link() != prev_link
             || self.selection_drag_snapshot() != prev_sel
             || (!prev_edge && self.edit.selectable.edge.running())
@@ -134,6 +138,7 @@ impl RuntimeCore {
     /// and the release that follows does nothing. A press selecting text lets go where the
     /// selection stands, without a click. False when no drag is held.
     pub(in crate::runtime) fn cancel_drag(&mut self) -> bool {
+        if self.cancel_dnd() { return true; }
         if self.cancel_drag_at(self.pointer.pos) { return true; }
         if !self.edit.selectable.phase.dragging() || !self.pointer.press.is_held() || self.edit.input_click.captured() { return false; }
         self.drop_press();
@@ -314,7 +319,11 @@ impl RuntimeCore {
         self.playground_pointer_down(app, x);
         self.press_selection(target, x, y);
         // Inside a draggable row, dragging drags the row; clicks still select words and lines.
-        if target.is_some_and(|t| self.tree.nodes[t].handlers.on_drag.is_some() || self.tree.nodes[t].handlers.drag_out.is_some()) {
+        if target.is_some_and(|t| {
+            self.tree.nodes[t].handlers.on_drag.is_some()
+                || self.tree.nodes[t].handlers.drag_out.is_some()
+                || self.tree.nodes[t].handlers.dnd_source.is_some()
+        }) {
             self.select_step(selectable::phase::Event::Release);
         }
         let Some(ti) = target else {
@@ -416,7 +425,14 @@ impl RuntimeCore {
         };
         let path = n.path.clone();
         let drag_out = self.drags_out(n).then(|| n.handlers.drag_threshold.unwrap_or(crate::drag_out::DRAG_THRESHOLD));
-        let drag_handler = drag_out.is_none().then(|| n.handlers.on_drag.clone()).flatten();
+        let dnd_threshold = (drag_out.is_none() && n.handlers.dnd_source.as_ref().is_some_and(|s| s.payload.is_some()))
+            .then(|| n.handlers.drag_threshold.unwrap_or(crate::dnd::DND_THRESHOLD));
+        let drag_handler = (drag_out.is_none() && dnd_threshold.is_none()).then(|| n.handlers.on_drag.clone()).flatten();
+        if let Some(threshold) = dnd_threshold {
+            self.arm_dnd(path.clone(), (x, y), (lx, ly), threshold);
+        } else {
+            self.disarm_dnd();
+        }
         if drag_handler.is_some() {
             self.frame.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
@@ -433,6 +449,10 @@ impl RuntimeCore {
         if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
         self.primary_released();
+        if self.dnd_pointer_up(x, y) {
+            self.pointer.pos = Some((x, y));
+            return;
+        }
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer.pos = Some((x, y));
             return;
@@ -581,6 +601,7 @@ impl RuntimeCore {
     pub fn cursor(&self) -> crate::el::Cursor {
         let Some((x, y)) = self.pointer.pos.filter(|&(x, y)| self.in_viewport(x, y)) else { return crate::el::Cursor::Default };
         if let Some(pan) = self.autoscroll_cursor() { return pan; }
+        if self.pointer.dnd.is_dragging() { return crate::el::Cursor::Grabbing; }
         // An element on its way out has no cursor: `Cursor::Hidden` ends when it's removed.
         // Selectable text and hoverable hit targets keep their own cursor inside a pressable or
         // draggable ancestor.

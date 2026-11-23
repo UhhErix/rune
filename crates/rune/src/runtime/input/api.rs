@@ -225,6 +225,14 @@ impl<S: 'static> Runtime<S> {
     pub fn drop_hovered(&self) -> Option<String> { self.core().drop_hovered() }
     #[inline(always)]
     pub fn drop_rejected_hovered(&self) -> Option<String> { self.core().drop_rejected_hovered() }
+    #[inline(always)]
+    pub fn is_dragging_payload(&self) -> bool { self.core().is_dragging_payload() }
+    #[inline(always)]
+    pub fn dnd_hovered(&self) -> Option<String> { self.core().dnd_hovered() }
+    #[inline(always)]
+    pub fn dnd_rejected_hovered(&self) -> Option<String> { self.core().dnd_rejected_hovered() }
+    #[inline(always)]
+    pub fn dnd_preview_rect(&self) -> Option<[f32; 4]> { self.core().dnd_preview_rect() }
 
     #[inline(always)]
     pub(crate) fn take_drag_out(&mut self) -> Option<crate::drag_out::DragOutStart> { self.core_mut().take_drag_out() }

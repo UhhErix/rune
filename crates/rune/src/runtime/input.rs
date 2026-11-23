@@ -7,6 +7,7 @@ pub(super) mod api;
 pub(super) mod app_ime;
 pub(super) mod autoscroll;
 pub(super) mod capture;
+pub(super) mod dnd;
 pub(super) mod drop;
 pub(crate) mod field_menu;
 pub(super) mod file_dialog;
