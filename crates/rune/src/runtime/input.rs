@@ -21,6 +21,7 @@ pub(super) mod hover_delay;
 pub(super) mod key_releases;
 pub(super) mod keys;
 pub(super) mod modal_focus;
+pub(super) mod modal_live;
 pub(super) mod modifier_keys;
 pub(super) mod physical;
 pub(super) mod pointer;
