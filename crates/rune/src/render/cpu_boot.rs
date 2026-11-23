@@ -72,6 +72,8 @@ pub struct Scene<'a> {
     half: HalfRounding,
     /// Packed explicit scroll-fade stops (`Runtime::fade_stops`), matching `Globals::flags[2..4]`.
     fade_stops: [f32; 2],
+    /// Maximum backdrop-blurred elements drawn in this scene (`Runtime::max_backdrop_blurs`).
+    max_backdrop_blurs: usize,
 }
 
 /// How a GPU stores a float into an `Rgba16Float` target. Vendors differ, and a layer's pixels
@@ -113,6 +115,7 @@ struct Flags {
     smoothing: Option<FontSmoothing>,
     half: HalfRounding,
     fade_stops: [u32; 2],
+    max_backdrop_blurs: usize,
 }
 
 /// An image atlas page: RGBA8 texels, `width * 4` bytes a row.
@@ -131,12 +134,18 @@ impl<'a> Scene<'a> {
     pub fn new(instances: &'a [Instance], atlas: &'a Atlas, images: &'a ImageAtlas, size: (u32, u32), clear: [f32; 4]) -> Self {
         let glyph_pages = (0..atlas.page_count()).filter_map(|p| atlas.page_data(p)).collect();
         let images = images.pages.iter().map(|p| Image { width: p.width, data: &p.data, dirty: p.dirty }).collect();
-        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default(), fade_stops: [0.0; 2] }
+        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default(), fade_stops: [0.0; 2], max_backdrop_blurs: crate::render::MAX_BACKDROP_BLURS }
     }
 
     /// Packed explicit scroll-fade stops (`Runtime::fade_stops`).
     pub fn fade_stops(mut self, stops: [f32; 2]) -> Self {
         self.fade_stops = stops;
+        self
+    }
+
+    /// Maximum backdrop-blurred elements drawn in this frame (`Runtime::max_backdrop_blurs`).
+    pub fn max_backdrop_blurs(mut self, max: usize) -> Self {
+        self.max_backdrop_blurs = max;
         self
     }
 
@@ -169,7 +178,7 @@ impl<'a> Scene<'a> {
 
     /// The scene-wide switches, which a frame that only recolours keeps.
     fn flags(&self) -> Flags {
-        Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half, fade_stops: [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()] }
+        Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half, fade_stops: [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()], max_backdrop_blurs: self.max_backdrop_blurs }
     }
 
     /// How the GPU that will take over rounds half floats (`HalfRounding::of_vendor`).

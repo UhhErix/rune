@@ -296,6 +296,7 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
     } else {
         let rt = app.rt_mut();
         f.ui.set_fade_stops(rt.fade_stops());
+        f.ui.set_max_backdrop_blurs(rt.max_backdrop_blurs());
         f.ui.prepare_ui(f.device, f.queue, &mut rt.text.atlas, &rt.instances, f.size);
         f.ui.draw(f.encoder, f.target, [0.0; 4]);
         false

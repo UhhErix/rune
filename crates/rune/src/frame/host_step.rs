@@ -622,6 +622,7 @@ pub(crate) fn draw_ui(
     clear: [f32; 4],
 ) {
     renderer.set_fade_stops(rt.fade_stops());
+    renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
     renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
     renderer.draw(encoder, target, clear);
 }

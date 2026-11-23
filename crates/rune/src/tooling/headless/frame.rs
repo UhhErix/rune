@@ -274,6 +274,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
             let ort = ov.frame(self.real_t, info.dt, self.app.rt().backdrop_dark().unwrap_or(s.dark));
             if !ort.instances.is_empty() {
                 ui.set_fade_stops(ort.fade_stops());
+                ui.set_max_backdrop_blurs(ort.max_backdrop_blurs());
                 ui.prepare_ui(&s.gpu.device, &s.gpu.queue, &mut ort.text.atlas, &ort.instances, (s.wp, s.hp));
                 ui.draw_over(&mut prepared.encoder, view);
             }

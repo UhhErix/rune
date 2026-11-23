@@ -9,7 +9,7 @@ impl Renderer {
     /// Makes and drops a backdrop blur with its composite for this renderer's format, for regen_dxbc.
     #[doc(hidden)]
     pub fn make_backdrop_blur(&self, device: &wgpu::Device) {
-        BackdropBlur::new(device, &self.bind_layout).ensure_composite(device, self.format);
+        BackdropBlur::new(device, &self.bind_layout, self.max_backdrop_blurs).ensure_composite(device, self.format);
     }
 
     /// Makes, times and drops what a first backdrop blur, layer blur, video frame, transparent
@@ -24,7 +24,7 @@ impl Renderer {
         use crate::gpu::springs::{Node, Track};
         let node = Node { x: Track::constant(0.0), y: Track::constant(0.0), opacity: Track::constant(1.0) };
         vec![
-            ("backdrop_blur", ms(|| BackdropBlur::new(device, &self.bind_layout).ensure_composite(device, self.format))),
+            ("backdrop_blur", ms(|| BackdropBlur::new(device, &self.bind_layout, self.max_backdrop_blurs).ensure_composite(device, self.format))),
             ("layer_blur", ms(|| drop(layer_blur::Pipeline::new(device, super::layers::FORMAT)))),
             ("video", ms(|| drop(crate::native_surface::SurfaceRenderer::new(device, self.format)))),
             ("alpha", ms(|| drop(AlphaSurface::new(device, self.format, (16, 16))))),

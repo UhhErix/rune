@@ -312,6 +312,7 @@ pub struct Renderer {
     layers: layers::Layers,
     srgb_blend: bool,
     fade_stops: [f32; 2],
+    max_backdrop_blurs: usize,
     /// Effect slots of the uploaded instances, by index.
     effects: Vec<(u32, Instance)>,
     /// Pooled viewport-sized backdrop copies, allocated only when a slot sets `effect_backdrop`
@@ -362,6 +363,14 @@ impl Renderer {
 
     pub fn fade_stops(&self) -> [f32; 2] {
         self.fade_stops
+    }
+
+    pub fn set_max_backdrop_blurs(&mut self, max: usize) {
+        self.max_backdrop_blurs = max;
+    }
+
+    pub fn max_backdrop_blurs(&self) -> usize {
+        self.max_backdrop_blurs
     }
 
     /// Opt-in retained geometry. IDs map instances to shared translation/opacity nodes.

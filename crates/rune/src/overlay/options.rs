@@ -172,6 +172,8 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must
     /// match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self { self.runtime.srgb_blend = enabled; self }
+    /// Maximum `El::backdrop_blur` elements blurred in a single frame (defaults to `MAX_BACKDROP_BLURS`).
+    pub fn max_backdrop_blurs(mut self, max: usize) -> Self { self.runtime.max_backdrop_blurs = max; self }
     /// Called before each frame; true means state changed, not that another frame is due.
     /// Defaults to the app's poll when its state type matches this overlay's. Other state
     /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;

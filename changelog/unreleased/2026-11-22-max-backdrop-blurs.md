@@ -1,0 +1,1 @@
+- \App::max_backdrop_blurs\, \ConfiguredOverlay::max_backdrop_blurs\, \Runtime::set_max_backdrop_blurs\, and \Renderer::set_max_backdrop_blurs\ let apps configure the per-frame \El::backdrop_blur\ cap (defaulting to \MAX_BACKDROP_BLURS\, 4) with dynamic levels uniform buffer sizing.
