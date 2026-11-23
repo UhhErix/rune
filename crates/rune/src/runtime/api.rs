@@ -255,6 +255,10 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn fade_stops(&self) -> [f32; 2] { self.core().fade_stops() }
     #[inline(always)]
+    pub fn set_max_backdrop_blurs(&mut self, max: usize) { self.core_mut().set_max_backdrop_blurs(max); }
+    #[inline(always)]
+    pub fn max_backdrop_blurs(&self) -> usize { self.core().max_backdrop_blurs() }
+    #[inline(always)]
     pub fn set_font_smoothing(&mut self, mode: crate::FontSmoothing) { self.core_mut().set_font_smoothing(mode); }
     #[inline(always)]
     pub fn font_smoothing(&self) -> crate::FontSmoothing { self.core().font_smoothing() }

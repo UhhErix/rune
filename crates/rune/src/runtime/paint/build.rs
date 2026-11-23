@@ -39,6 +39,7 @@ impl RuntimeCore {
         self.clear_drop_hits();
         self.motion.reset_loops_active();
         self.paint.scale_frame = None;
+        self.paint.frame_backdrop_blurs = 0;
         self.paint.videos_active = false;
         self.paint.animated_icons = false;
         self.paint.animated_icons_shown = false;

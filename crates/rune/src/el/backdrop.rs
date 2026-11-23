@@ -26,7 +26,8 @@ impl El {
     /// Unlike `El::system_material`, which shows what is behind the window, this blurs Rune's
     /// own content and looks the same on every platform. The element's own opacity (including its
     /// default enter and exit fade) fades the blur with it while still blurring what sits behind
-    /// the element, and its outer shadows leave the blurred interior clear. Blurs drawn into a
+    /// the element, and its outer shadows leave the blurred interior clear. Blurs past an explicit
+    /// `App::max_backdrop_blurs` cap, or drawn into a
     /// target that can't be copied (no `COPY_SRC`, or a caller's own `wgpu::RenderPass` via
     /// `Renderer::draw_range`) draw only their fill. Inside an ancestor drawn as one layer (an
     /// ancestor with opacity below 1 — including one playing a fade transition — `El::group_opacity`,

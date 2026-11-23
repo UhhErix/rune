@@ -168,6 +168,14 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Optional cap on `El::backdrop_blur` elements blurred in a single frame. Defaults to
+    /// uncapped (`usize::MAX`), growing GPU uniform slots as needed. Elements past an explicit cap
+    /// draw only their fill.
+    pub fn max_backdrop_blurs(mut self, max: usize) -> Self {
+        self.runtime.max_backdrop_blurs = max;
+        self
+    }
+
     /// How this app's windows and overlays rasterise and place glyphs (see [`crate::FontSmoothing`]):
     /// `On` by default on macOS and in a Mac's browser, `WindfoilChromium` elsewhere.
     /// `ConfiguredOverlay::font_smoothing` overrides it per overlay, and

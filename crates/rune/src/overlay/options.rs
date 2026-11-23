@@ -177,6 +177,8 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
     /// while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.font_smoothing = Some(mode); self }
+    /// Optional cap on `El::backdrop_blur` elements blurred in a single frame (defaults to uncapped).
+    pub fn max_backdrop_blurs(mut self, max: usize) -> Self { self.runtime.max_backdrop_blurs = max; self }
     /// Called before each frame; true means state changed, not that another frame is due.
     /// Defaults to the app's poll when its state type matches this overlay's. Other state
     /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;
