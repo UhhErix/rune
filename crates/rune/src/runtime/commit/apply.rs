@@ -184,7 +184,7 @@ impl RuntimeCore {
             } else {
                 None
             };
-            if let Some(v) = parent_virtual {
+            if let Some(v) = parent_virtual && !v.horizontal {
                 scene_rect.y -= v.before;
             }
             if !live_by_id.is_empty() && let Some(&row) = live_by_id.get(&id) { live_row = Some((i, row)); }
@@ -209,7 +209,9 @@ impl RuntimeCore {
             // Text leads its background so theme crossfades never dip through zero contrast; a
             // colour change asked to land at once lands at once on text too.
             let spring_tc = if spring_c == Spring::NONE { spring_c } else { Spring::new((spring_c.duration * 0.5).max(0.1), spring_c.bounce) };
-            let row_like = nodes[i].in_row == RowLayout::Snaps || nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some());
+            let row_like = nodes[i].in_row == RowLayout::Snaps
+                || nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some())
+                || parent_virtual.is_some_and(|v| v.horizontal);
             // An `El::instant_changes` element lands its changes, and those of what it holds;
             // its own entrance and exit, and colours, stay with the commit, as do the entrances of
             // an `El::animated_changes` subtree inside it.

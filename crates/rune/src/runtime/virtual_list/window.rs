@@ -18,9 +18,16 @@ impl types::TreeState {
         for (path, v) in virtuals.iter_mut() {
             v.drawn.clear();
             let (true, Some(list), Some(view)) = (fresh, self.index_of_path(path), self.index_of_path(&v.scroll_path)) else { continue };
-            let (top, bottom) = (drawn[view][1], drawn[view][1] + drawn[view][3]);
+            let (start, end) = if v.horizontal {
+                (drawn[view][0], drawn[view][0] + drawn[view][2])
+            } else {
+                (drawn[view][1], drawn[view][1] + drawn[view][3])
+            };
             let rows = (list + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(list)).filter(|&j| nodes[j].parent == Some(list));
-            for j in rows.filter(|&j| drawn[j][3] > 0.0 && drawn[j][1] < bottom && drawn[j][1] + drawn[j][3] > top) {
+            for j in rows.filter(|&j| {
+                let (pos, len) = if v.horizontal { (drawn[j][0], drawn[j][2]) } else { (drawn[j][1], drawn[j][3]) };
+                len > 0.0 && pos < end && pos + len > start
+            }) {
                 v.drawn.extend(nodes[j].key.clone());
             }
         }
@@ -34,7 +41,9 @@ impl types::TreeState {
         v: &crate::el::virtual_list::VirtualList,
     ) -> (f32, bool) {
         self.id_of_path(&v.scroll_path).and_then(|id| scrolls.get(&id))
-            .map_or((0.0, false), |s| v.at(s.offset as f32, s.pinned()))
+            .map_or((0.0, false), |s| {
+                if v.horizontal { v.at(s.x.offset as f32, false) } else { v.at(s.offset as f32, s.pinned()) }
+            })
     }
 }
 
