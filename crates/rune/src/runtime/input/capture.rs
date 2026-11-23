@@ -56,12 +56,15 @@ pub(crate) struct Held {
     /// runs nothing.
     pub(crate) pressed_on_down: bool,
     pub(crate) touch: bool,
+    /// The open modals a press on a node live through the modal (`El::modal_live`) dismisses,
+    /// innermost first, when its release delivers it: a press that delivers on down dismissed then.
+    pub(crate) dismiss: Vec<String>,
 }
 
 impl Held {
     /// A press that just went down at `at`, inside its element and still.
     pub(crate) fn new(path: String, drag: Drag, button: PointerButton, at: (f32, f32), down_at: f64, second: bool, drag_out: Option<f32>) -> Self {
-        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false }
+        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false, dismiss: Vec::new() }
     }
 
     pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }

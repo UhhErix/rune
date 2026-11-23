@@ -301,7 +301,7 @@ impl RuntimeCore {
             let i = *self.tree.node_index.get(&id)?;
             let n = &self.tree.nodes[i];
             // A secondary-only child must not obscure primary input or background blur.
-            (!self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
+            (!self.subtree_exiting(i) && self.pointer_allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
                 || (n.role == "button" && n.vis_flags.hit()) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
                 || self.is_selectable(i))).then_some(i)
         })
@@ -318,7 +318,7 @@ impl RuntimeCore {
         let handles = |n: &Node| n.has_primary_handler() || n.focus.enabled;
         let mut p = n.parent;
         while let Some(a) = p {
-            if self.subtree_exiting(a) || !self.allowed(a) || self.tree.nodes[a].handlers.modal.is_some() { break; }
+            if self.subtree_exiting(a) || !self.pointer_allowed(a) || self.tree.nodes[a].handlers.modal.is_some() { break; }
             if handles(&self.tree.nodes[a]) { return Some(a); }
             p = self.tree.nodes[a].parent;
         }
@@ -372,7 +372,7 @@ impl RuntimeCore {
         if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
             || n.text.as_ref().is_some_and(|t| t.selectable))
             && !self.subtree_exiting(i)
-            && self.allowed(i) && effective_opacity > 0.001 && visible
+            && self.pointer_allowed(i) && effective_opacity > 0.001 && visible
         {
             let c = if n.parent.is_some() { pinh_clip } else { self.paint.inh_scratch[0].clip };
             let rect_pt = if (press_k - 1.0).abs() > 1e-5 {
@@ -401,7 +401,7 @@ impl RuntimeCore {
         // element with `pointer-events: none` does.
         let n = &self.tree.nodes[i];
         if (self.hit.hits_len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some())
-            && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible
+            && !self.subtree_exiting(i) && self.pointer_allowed(i) && effective_opacity > 0.001 && visible
         {
             let c = if n.parent.is_some() { pinh_clip } else { self.paint.inh_scratch[0].clip };
             let r = if n.parent.is_some() {
@@ -409,18 +409,18 @@ impl RuntimeCore {
             } else { rect_pt };
             self.hit.push_wheel_hit(n.id, r);
         }
-        if self.tree.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.tree.nodes[i].text_cut(s))) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+        if self.tree.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.tree.nodes[i].text_cut(s))) && !self.subtree_exiting(i) && self.pointer_allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.tree.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.hit.push_help_hit(self.tree.nodes[i].id, r, hits_before, None);
             // The cold block the test above read: a held-open tooltip costs nothing to find later.
             if self.hit.help_held.is_none() && r[2] > r[0] && r[3] > r[1] && self.tree.nodes[i].cold.get().is_some_and(|c| c.help_open) { self.hit.help_held = Some(self.tree.nodes[i].id); }
         }
-        if self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.links.iter().any(|l| l.help.is_some())) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+        if self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.links.iter().any(|l| l.help.is_some())) && !self.subtree_exiting(i) && self.pointer_allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.tree.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             self.push_link_help_hits(i, rect_pt, [c[0] / s, c[1] / s, c[2] / s, c[3] / s], hits_before);
         }
-        if self.tree.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
+        if self.tree.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) && !self.subtree_exiting(i) && self.pointer_allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.tree.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.hit.push_drop_hit(self.tree.nodes[i].id, r, hits_before);

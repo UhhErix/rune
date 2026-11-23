@@ -229,13 +229,26 @@ impl RuntimeCore {
             self.edit.input_click.clear();
         }
         if let Some(i) = self.active_modal()
-            && target.is_none_or(|t| !self.allowed(t))
+            && target.is_none_or(|t| !self.pointer_allowed(t))
         {
             if self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside) {
                 self.frame.queue.push(Action::Dismiss(self.tree.nodes[i].path.clone()));
             }
             return;
         }
+        // A node live through the open modal (`El::modal_live`) takes the press, but takes no focus:
+        // the press dismisses the open modals that dismiss on an outside press, innermost first,
+        // and then goes on to the node, in the same frame.
+        let live = target.is_some_and(|t| !self.modal_member(t));
+        let dismiss: Vec<String> = if live {
+            self.kbd
+                .outside_modals()
+                .iter()
+                .map(|&i| self.tree.nodes[i].path.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.playground_pointer_down(app, x);
         self.press_selection(target, x, y);
         // Inside a draggable row, dragging drags the row; clicks still select words and lines.
@@ -267,7 +280,7 @@ impl RuntimeCore {
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
             first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
-        if let Some(ji) = self.textbox_input(ti) {
+        if let Some(ji) = self.textbox_input(ti).filter(|_| !live) {
             self.input_down(ji, x, y, now, second);
             return;
         }
@@ -281,7 +294,7 @@ impl RuntimeCore {
         // `tabIndex` scroller (a `ScrollView`) clicked where nothing inside takes focus; and a
         // press on a layer that hands focus below it (`El::press_focuses_below`) focuses the one
         // under the pointer.
-        if n.focus.below && !on_link {
+        if !live && n.focus.below && !on_link {
             match self.scroll_region_below(ti, x, y) {
                 Some(r) => self.frame.queue.push(Action::FocusControl(self.tree.nodes[r].path.clone())),
                 None if self.kbd.focus.path().is_some() => self.frame.queue.push(Action::Blur),
@@ -295,15 +308,31 @@ impl RuntimeCore {
         let in_textbox = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let (preserve_focus, keeps) = (self.press_keeps_focus(ti), self.press_keeps_selection(ti));
         let below = n.focus.below;
-        if !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
+        if !live && !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
             self.frame.queue.push(Action::FocusControl(n.path.clone()));
-        } else if !below && !on_link && !keeps && let Some(p) = keyed {
+        } else if !live
+            && !below
+            && !on_link
+            && !keeps
+            && let Some(p) = keyed
+        {
             self.frame.queue.push(Action::FocusControl(self.tree.nodes[p].path.clone()));
-        } else if !below && !on_link && !in_textbox && !preserve_focus {
+        } else if !live && !below && !on_link && !in_textbox && !preserve_focus {
             // Tab goes on from here, as from a browser's click on plain content.
             if self.commit.defaults.web_focus { self.kbd.focus.step(focus_machine::FocusEvent::StartAt(n.path.clone())); }
             if self.kbd.focus.path().is_some() { self.frame.queue.push(Action::Blur); }
         }
+        // A press delivered on down dismisses first, ahead of its drag and its press; one delivered
+        // at release keeps its dismissals for `release`.
+        let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
+        let held_dismiss = if on_down {
+            for path in dismiss {
+                self.frame.queue.push(Action::Dismiss(path));
+            }
+            Vec::new()
+        } else {
+            dismiss
+        };
         let r = n.target;
         let [lx, ly] = self.to_local(ti, x, y);
         let d = Drag {
@@ -327,12 +356,12 @@ impl RuntimeCore {
         if n.handlers.on_drag.is_some() && drag_out.is_none() {
             self.frame.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
-        let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
         if on_down {
             self.frame.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary, false));
         }
         let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down);
         held.touch = touch;
+        held.dismiss = held_dismiss;
         self.pointer.press.hold(held);
     }
 
@@ -408,10 +437,30 @@ impl RuntimeCore {
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
         let Some(held) = self.pointer.press.release(first) else { return };
         let inside = held.inside();
-        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, .. } = *held;
+        let scrolled = held.hit == capture::Hit::Cancelled;
+        let capture::Held {
+            path,
+            drag: d,
+            button,
+            at,
+            down_at,
+            moved,
+            second: double,
+            link,
+            pressed_on_down,
+            dismiss,
+            ..
+        } = *held;
         self.refresh_hover_within();
         if moved { self.pointer.clear_press_clicks(); }
         if input_capture { return; }
+        // A press on a live node (`El::modal_live`) dismisses the open modals before it delivers
+        // anything, in this frame's queue; a scroll that took the press dismisses nothing.
+        if !scrolled {
+            for modal in dismiss {
+                self.frame.queue.push(Action::Dismiss(modal));
+            }
+        }
         let Some(i) = self.live_index(&path) else { return };
         let n = &self.tree.nodes[i];
         // A button the element didn't opt in to is the middle button's click on a link or on
@@ -472,7 +521,7 @@ impl RuntimeCore {
         // Selectable text shows its I-beam even where its presses go to a row around it.
         let target = match self.pointer.press.path() {
             Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
-            Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
+            Some(p) => self.live_index(p).filter(|&i| self.pointer_allowed(i)),
             // Moving layout holds hover: the cursor stays with what the pointer was over.
             None => self.held_hover().flatten().or_else(|| self.selectable_at(x, y).or_else(|| self.primary_target(x, y))),
         };
