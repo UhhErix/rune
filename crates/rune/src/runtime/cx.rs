@@ -71,6 +71,7 @@ pub(crate) struct CxCore {
     pub(super) caret_read: std::cell::Cell<bool>,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
+    pub(super) active_drag: Option<crate::dnd::ActiveDrag>,
 }
 
 impl CxCore {
@@ -138,6 +139,9 @@ impl CxCore {
     pub(crate) fn reduced_motion(&mut self, on: bool) { self.reduced_motion = on; }
     pub(crate) fn time_scale(&mut self, scale: f32) { self.time_scale = scale.clamp(0.0, 8.0); }
     pub(crate) fn zoom(&mut self, k: f32) { self.zoom = super::zoom::clamp(k); }
+    pub(crate) fn active_drag(&self) -> Option<&crate::dnd::ActiveDrag> {
+        self.active_drag.as_ref()
+    }
     pub(crate) fn caret(&self, key: &str) -> Option<[f32; 4]> {
         self.caret_read.set(true);
         let rect = caret_of(&self.caret, key);
@@ -336,6 +340,9 @@ impl<S> Cx<S> {
     /// popup placed from it lands the frame after each edit.
     #[inline(always)]
     pub fn caret(&self, key: &str) -> Option<[f32; 4]> { self.core.caret(key) }
+    /// The active in-app pointer drag ([`El::draggable`](crate::El::draggable)), if one is running.
+    #[inline(always)]
+    pub fn active_drag(&self) -> Option<&crate::dnd::ActiveDrag> { self.core.active_drag() }
 }
 
 /// [`Cx::caret`] for the caret `caret` (the focused field's path and rect).

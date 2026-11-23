@@ -105,6 +105,8 @@ impl RuntimeCore {
             hold_windows: false,
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
+            active_drag: None,
+            dnd_preview: None,
         };
         drop(m.finish(&mut self.text, &Tx::default()));
         self.text.keep_prepared(&before, PREPARE_BYTES)
