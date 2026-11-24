@@ -14,6 +14,7 @@ members = [
     "crates/rune-i18n",
     "crates/rune-staging",
     "crates/rune-kit",
+    "crates/rune-ui",
     "crates/rune-highlights",
     "crates/rune-fx",
     "crates/rune-light",
@@ -38,6 +39,7 @@ members = [
     "examples/playground",
     "examples/knobs",
     "examples/kit-gallery",
+    "examples/ui-gallery",
     "examples/background",
     "examples/live-values",
     "examples/shapes",
@@ -80,6 +82,7 @@ default-members = [
     "crates/rune-motion",
     "crates/rune-staging",
     "crates/rune-kit",
+    "crates/rune-ui",
     "crates/rune-highlights",
     "crates/rune-fx",
     "crates/rune-light",
@@ -187,6 +190,7 @@ rune-gpu = { path = "crates/rune-gpu", default-features = false }
 rune-highlights = { path = "crates/rune-highlights" }
 rune-image = { path = "crates/rune-image", default-features = false }
 rune-kit = { path = "crates/rune-kit", default-features = false }
+rune-ui = { path = "crates/rune-ui" }
 rune-knobs = { path = "crates/rune-knobs" }
 rune-light = { path = "crates/rune-light" }
 rune-luau = { path = "crates/rune-luau" }
