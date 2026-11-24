@@ -285,6 +285,7 @@ impl RuntimeCore {
                 }
             }
             if let Some((surface, fit)) = &n.vis.surface {
+                surface.set_display_size(w.round().max(0.0) as u32, h.round().max(0.0) as u32);
                 if let Some(pulled) = surface.pull_video(video_clock, self.frame.live.waker()) {
                     // A clip whose next picture isn't due for a while wakes the window
                     // then, instead of drawing every refresh in between.

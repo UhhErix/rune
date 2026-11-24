@@ -15,6 +15,7 @@
 mod audio;
 mod decoder;
 mod gpu;
+pub(super) mod hls;
 mod inbox;
 mod layer;
 mod machine;
@@ -55,6 +56,10 @@ pub(crate) struct Native {
     /// (`RUNE_VIDEO_LOG`).
     opened: Option<Instant>,
     screen: Screen,
+    /// Whether this clip uses the HLS playlist/segment pipeline.
+    hls: bool,
+    /// Packed display size shared with `Shared` for headless ABR selection.
+    display_size: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// What puts the picture at `Native::shown` on screen.
@@ -162,16 +167,24 @@ impl Drop for Native {
 }
 
 pub(super) fn created(shared: &Arc<Shared>) {
-    // Media Foundation's network source sends no headers of ours.
-    if !shared.headers.is_empty() {
+    let is_hls = shared.is_hls();
+    {
+        let mut native = shared.native.lock().unwrap();
+        native.hls = is_hls;
+        native.display_size = shared.display_size.clone();
+    }
+    // Media Foundation's network source sends no headers of ours; HLS uses our own WinHTTP client.
+    if !shared.headers.is_empty() && !is_hls {
         shared.ctl.lock().unwrap().fail("request headers aren't supported for clips on Windows yet".into());
     }
 }
 
 pub(super) fn enable() {}
 
-pub(super) fn probe(native: &mut Native, source: &MediaSource, _: &[(String, String)], kind: Kind) -> Result<Meta, String> {
-    let (still, meta) = still::open(source, kind)?;
+pub(super) fn probe(native: &mut Native, source: &MediaSource, headers: &[(String, String)], kind: Kind) -> Result<Meta, String> {
+    let is_hls = native.hls || matches!(source, MediaSource::Url(u) if super::hls::is_hls_url(u));
+    let disp = super::hls::prefetch::unpack_display_size(native.display_size.load(Ordering::Relaxed));
+    let (still, meta) = still::open(source, headers, kind, is_hls, disp)?;
     native.still = still;
     Ok(meta)
 }
@@ -341,6 +354,8 @@ impl Native {
         let weak = Arc::downgrade(shared);
         let job = Job {
             source: shared.source.clone(),
+            headers: shared.headers.clone(),
+            hls: shared.is_hls(),
             kind: shared.kind,
             // Picture times count on through loops; the clip starts at its own time.
             start: c.duration.filter(|d| *d > 0.0).map_or(at, |d| at.rem_euclid(d)),
@@ -355,6 +370,8 @@ impl Native {
                 }
             }),
             clock: self.clock.clone(),
+            display_size: shared.display_size.clone(),
+            active_variant: shared.active_variant.clone(),
             started: rune_core::time::now(),
         };
         self.opened = Some(job.started);
@@ -377,6 +394,14 @@ impl Native {
                         c.open(Ok(facts.meta));
                     }
                     self.event(shared, c, Event::Opened);
+                }
+                News::Updated(facts) => {
+                    self.facts = Some(facts);
+                    if facts.meta.size != c.size {
+                        c.size = facts.meta.size;
+                        c.meta = Some(facts.meta);
+                        c.generation += 1;
+                    }
                 }
                 News::Failed(e) => {
                     if decoder::logging() {
