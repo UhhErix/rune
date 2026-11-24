@@ -19,3 +19,4 @@ pub use video::MediaSource;
 pub use video::Player;
 pub use video::PlayerState;
 pub use video::Video;
+pub use video::hls::HlsVariantInfo;

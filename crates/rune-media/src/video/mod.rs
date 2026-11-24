@@ -28,8 +28,10 @@
 //!
 //! Other platforms report [`PlayerState::Failed`] and draw a neutral placeholder for video.
 
+mod callbacks;
 #[cfg(all(target_os = "macos", feature = "ogg-audio"))]
 mod foreign;
+pub mod hls;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -332,15 +334,24 @@ impl Player {
     }
 
     fn create(source: MediaSource, kind: Kind, headers: Vec<(String, String)>) -> Self {
+        Self::create_inner(source, kind, headers, false)
+    }
+
+    pub(super) fn create_inner(source: MediaSource, kind: Kind, headers: Vec<(String, String)>, force_hls: bool) -> Self {
         let ctl = Control { muted: kind == Kind::Video, kind, ..Control::default() };
         let shared = Arc::new(Shared {
             source,
             headers,
+            force_hls,
             kind,
             ctl: Mutex::new(ctl),
             wakes: Mutex::new(Vec::new()),
             waker: WakerSlot::default(),
             notified: AtomicU64::new(0),
+            display_size: Arc::new(AtomicU64::new(0)),
+            active_variant: Arc::new(Mutex::new(None)),
+            poster: Mutex::new(None),
+            callbacks: Mutex::new(callbacks::Callbacks::default()),
             native: Mutex::new(backend::Native::default()),
             backend: &BACKEND,
         });
@@ -563,12 +574,18 @@ pub struct Shared {
     source: MediaSource,
     /// HTTP request headers for a URL source. Never logged.
     headers: Vec<(String, String)>,
+    force_hls: bool,
     kind: Kind,
     ctl: Mutex<Control>,
     wakes: Mutex<Vec<Weak<rune_core::live::Wake>>>,
     waker: WakerSlot,
     /// The generation windows last heard about.
     notified: AtomicU64,
+    /// Packed `(width << 32) | height` physical display size for ABR resolution capping.
+    display_size: Arc<AtomicU64>,
+    active_variant: Arc<Mutex<Option<hls::HlsVariantInfo>>>,
+    poster: Mutex<Option<rune_image::Pixels>>,
+    callbacks: Mutex<callbacks::Callbacks>,
     native: Mutex<backend::Native>,
     backend: &'static Backend,
 }
@@ -602,6 +619,7 @@ impl Shared {
     fn settle(&self, windows: bool) {
         let generation = self.ctl.lock().unwrap().generation;
         self.waker.tell(generation);
+        self.deliver_callbacks();
         if self.notified.swap(generation, Ordering::AcqRel) != generation && windows {
             self.wake_windows();
         }
@@ -658,7 +676,7 @@ impl Shared {
         let pulled = {
             let mut c = self.ctl.lock().unwrap();
             for effect in step(&mut c, Event::Drawn) {
-                if effect == Effect::Placeholder {
+                if effect == Effect::Placeholder && !self.push_poster_if_any(surface) {
                     push_placeholder(surface);
                 }
             }
