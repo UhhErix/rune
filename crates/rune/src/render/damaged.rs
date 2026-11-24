@@ -24,6 +24,7 @@ pub(super) struct Retained {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     current: bool,
+    glass_sig: Option<u64>,
 }
 
 /// The renderer's side of a partial frame.
@@ -52,7 +53,15 @@ impl Renderer {
     /// The next `draw` may redraw only `rects` (`[x, y, width, height]` each, target pixels, at
     /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`.
     pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) {
+        let clamped: Vec<[u32; 4]> = rects.iter().take(MAX_RECTS).copied().collect();
         let mut d = self.damage.lock().unwrap();
+        let kept_sig = d.retained.as_ref().filter(|r| r.current).and_then(|r| r.glass_sig);
+        if let Err(why) = self.redraws_in_place_for(&clamped, kept_sig) {
+            d.armed.clear();
+            d.runs.clear();
+            d.drawn = Some(Err(why));
+            return;
+        }
         if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("last frame"),
@@ -65,9 +74,9 @@ impl Renderer {
                 view_formats: &[self.format],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(self.format), ..Default::default() });
-            d.retained = Some(Retained { texture, view, current: false });
+            d.retained = Some(Retained { texture, view, current: false, glass_sig: None });
         }
-        let fills: Vec<Instance> = rects.iter().take(MAX_RECTS).map(|&[x, y, w, h]| Instance {
+        let fills: Vec<Instance> = clamped.iter().map(|&[x, y, w, h]| Instance {
             rect: [x as f32, y as f32, w as f32, h as f32],
             radii: [0.0; 4],
             fill: clear,
@@ -85,7 +94,7 @@ impl Renderer {
         }));
         // Through the renderer's staging, as a layer's quad: `Queue::write_buffer` makes a buffer each call.
         if !fills.is_empty() { self.uploads.staging(device, queue).write_buffer(quads, 0, bytemuck::cast_slice(&fills)); }
-        d.armed = rects.iter().take(MAX_RECTS).copied().collect();
+        d.armed = clamped;
         d.runs.clear();
         d.clear = clear;
         d.drawn = Some(Err("drawn by the compositor"));
@@ -127,7 +136,7 @@ impl Renderer {
     pub(crate) fn arm_loop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], patched: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) -> Result<Vec<[i32; 4]>, &'static str> {
         // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
         if clear[3] != 1.0 { return Err("clear"); }
-        self.redraws_in_place()?;
+        self.redraws_in_place_base()?;
         let held = self.held_instances(paint, instances.len()).ok_or("buffer")?;
         let at = |i: &u32| *i as usize;
         // Only what differs from what the buffer holds, which is what the last frame drew (a
@@ -149,6 +158,8 @@ impl Renderer {
             }
         };
         let (draw, runs, layers) = cull_runs(instances, &units, &rects, patched);
+        let kept_sig = self.damage.lock().unwrap().retained.as_ref().filter(|r| r.current).and_then(|r| r.glass_sig);
+        self.redraws_in_place_for(&draw, kept_sig)?;
         self.arm_damage(device, queue, &draw, clear, size, format);
         if super::pixel_check::on() { self.pixel_check_arm(device, size, format); }
         let mut d = self.damage.lock().unwrap();
@@ -173,10 +184,11 @@ impl Renderer {
         if let Some(c) = d.pixel.as_mut() { c.frame_ended(); }
         let drawn = d.drawn.take().unwrap_or(Err("not armed"));
         if drawn.is_err() {
-            if self.redraws_in_place().is_err() {
+            if self.redraws_in_place_base().is_err() {
                 d.retained = None;
             } else if let Some(r) = d.retained.as_mut() {
                 r.current = false;
+                r.glass_sig = None;
             }
         }
         drawn
@@ -190,16 +202,34 @@ impl Renderer {
         had
     }
 
+    fn redraws_in_place_base(&self) -> Drawn {
+        if self.effects.iter().any(|(_, i)| i.kind() != Some(Kind::LiquidGlass)) { return Err("effect"); }
+        if self.has_backdrop_blur() { return Err("backdrop blur"); }
+        if self.springs.is_some() { return Err("springs"); }
+        if !self.layers.in_place() { return Err("layer"); }
+        if self.surfaces.as_ref().is_some_and(|s| !s.draws_nothing()) { return Err("surface"); }
+        Ok(())
+    }
+
+    fn redraws_in_place_for(&self, rects: &[[u32; 4]], kept_glass_sig: Option<u64>) -> Drawn {
+        self.redraws_in_place_base()?;
+        if self.has_liquid_glass() {
+            if !self.liquid_glass_disjoint(rects) {
+                return Err("liquid glass");
+            }
+            if let Some(prev) = kept_glass_sig && self.liquid_glass_signature() != Some(prev) {
+                return Err("liquid glass");
+            }
+        }
+        Ok(())
+    }
+
     /// Whether this frame can redraw only part of its target: nothing draws there but its own
     /// instances (no turned or blurred layer, effect slot, backdrop blur, native surface or GPU
     /// spring moves pixels the instances don't say).
     pub(super) fn redraws_in_place(&self) -> Drawn {
-        if !self.effects.is_empty() { return Err("effect"); }
-        if self.has_backdrop_blur() { return Err("backdrop blur"); }
+        self.redraws_in_place_base()?;
         if self.has_liquid_glass() { return Err("liquid glass"); }
-        if self.springs.is_some() { return Err("springs"); }
-        if !self.layers.in_place() { return Err("layer"); }
-        if self.surfaces.as_ref().is_some_and(|s| !s.draws_nothing()) { return Err("surface"); }
         Ok(())
     }
 
@@ -215,7 +245,8 @@ impl Renderer {
         let d = &mut *guard;
         let looped = std::mem::take(&mut d.looped);
         if d.armed.is_empty() { return false; }
-        if let Err(why) = self.redraws_in_place() {
+        let kept_sig = d.retained.as_ref().filter(|r| r.current).and_then(|r| r.glass_sig);
+        if let Err(why) = self.redraws_in_place_for(&d.armed, kept_sig) {
             d.drawn = Some(Err(why));
             return false;
         }
@@ -275,6 +306,7 @@ impl Renderer {
             // Behind: this frame draws whole, into the kept frame.
             self.draw_timed(encoder, &kept.view, clear, None);
             kept.current = true;
+            kept.glass_sig = self.liquid_glass_signature();
         }
         // `RUNE_LOOP_CHECK=2`: this loop-only frame's picture, and the whole frame's beside it.
         if looped && partial && let Some(c) = d.pixel.as_mut() { self.pixel_check_encode(encoder, c, &kept.texture, clear, &rects); }

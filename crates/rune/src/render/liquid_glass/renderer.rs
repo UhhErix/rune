@@ -3,7 +3,7 @@
 use super::composite::{EpochUniform, build_epoch_uniform};
 use super::plan::plan_epochs;
 use super::pyramid::{SLOT, SLOTS_PER_EPOCH, STEP, write_epoch_down_uniforms};
-use super::{LiquidGlassFrame, LiquidGlassPass, LiquidGlassStats};
+use super::{CachedEpochKey, LiquidGlassFrame, LiquidGlassPass, LiquidGlassStats};
 use crate::render::pass::ActivePass;
 use crate::render::{Instance, Kind, Renderer, layers};
 
@@ -42,6 +42,68 @@ impl Renderer {
             .is_some_and(|lg| !lg.records.is_empty())
     }
 
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+    pub(in crate::render) fn liquid_glass_signature(&self) -> Option<u64> {
+        let lg = self.liquid_glass.as_ref().filter(|lg| !lg.records.is_empty())?;
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut mix = |bytes: &[u8]| {
+            for &b in bytes {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        mix(&self.liquid_glass_frame.saturation_scale.to_bits().to_le_bytes());
+        mix(bytemuck::cast_slice(&self.liquid_glass_frame.shapes));
+        let cursor_lit = self
+            .liquid_glass_frame
+            .shapes
+            .iter()
+            .any(|s| ((s.light[1] as u32) & super::FLAG_CURSOR_LIGHT) != 0);
+        if cursor_lit {
+            mix(bytemuck::cast_slice(&self.liquid_glass_frame.pointer));
+        }
+        for ep in &lg.epochs {
+            mix(bytemuck::cast_slice(&ep.region));
+            mix(bytemuck::cast_slice(&ep.origin));
+            mix(bytemuck::cast_slice(&ep.size));
+            mix(&(ep.max_mip as u64).to_le_bytes());
+        }
+        for rec in &lg.records {
+            mix(&rec.at.to_le_bytes());
+            mix(&(rec.epoch as u64).to_le_bytes());
+        }
+        Some(h)
+    }
+
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+    pub(in crate::render) fn liquid_glass_disjoint(&self, rects: &[[u32; 4]]) -> bool {
+        let Some(lg) = self.liquid_glass.as_ref().filter(|lg| !lg.records.is_empty()) else {
+            return true;
+        };
+        for &[rx, ry, rw, rh] in rects {
+            let (rx0, ry0, rx1, ry1) = (rx as f32, ry as f32, (rx + rw) as f32, (ry + rh) as f32);
+            for ep in &lg.epochs {
+                let r = ep.region;
+                if rx0 < r[2] + 1.0 && rx1 > r[0] - 1.0 && ry0 < r[3] + 1.0 && ry1 > r[1] - 1.0 {
+                    return false;
+                }
+            }
+            for &(_, ref inst) in &self.effects {
+                if inst.kind() != Some(Kind::LiquidGlass) {
+                    continue;
+                }
+                let r = inst.rect;
+                if rx0 < r[0] + r[2] + 1.0
+                    && rx1 > r[0] - 1.0
+                    && ry0 < r[1] + r[3] + 1.0
+                    && ry1 > r[1] - 1.0
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Stats from the most recently prepared Liquid Glass frame (epochs, records, shapes, pyramid bytes).
     pub fn liquid_glass_stats(&self) -> LiquidGlassStats {
         self.liquid_glass.as_ref().map_or_default(|lg| lg.stats)
@@ -75,12 +137,20 @@ impl Renderer {
         lg.ensure_composite(device, self.format);
     }
 
+    #[cfg(test)]
+    pub(crate) fn glass_epoch0_reuses(&self) -> u64 {
+        self.liquid_glass
+            .as_ref()
+            .map_or(0, |lg| lg.epoch0_reuses.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     pub(in crate::render) fn prepare_liquid_glass(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instances: &[Instance],
         (vw, vh): (u32, u32),
+        backdrop_deps_clean: bool,
     ) {
         let glass_indices: Vec<u32> = self
             .effects
@@ -92,12 +162,16 @@ impl Renderer {
             lg.records.clear();
             lg.epochs.clear();
             lg.stats = LiquidGlassStats::default();
+            lg.epoch0_backdrop_unchanged = false;
         }
         if glass_indices.is_empty()
             || self.liquid_glass_frame.shapes.is_empty()
             || vw == 0
             || vh == 0
         {
+            if let Some(lg) = &mut self.liquid_glass {
+                lg.invalidate_cache();
+            }
             return;
         }
         let staging = self.uploads.staging(device, queue);
@@ -196,6 +270,32 @@ impl Renderer {
             );
         }
 
+        let only_liquid_glass = self
+            .effects
+            .iter()
+            .all(|(_, i)| i.kind() == Some(Kind::LiquidGlass));
+        let epoch0_unchanged = backdrop_deps_clean
+            && only_liquid_glass
+            && epochs.len() == 1
+            && self.springs.is_none()
+            && self.surfaces.as_ref().is_none_or(|s| s.draws_nothing())
+            && self.liquid_glass_frame.probes.is_empty()
+            && records.first().is_some_and(|r| {
+                r.starts_epoch
+                    && r.epoch == 0
+                    && (self.uploads.first_changed >= r.at as usize
+                        || (self.layers.in_place()
+                            && self.uploads.changed_bounds.is_some_and(|b| {
+                                let ep = &epochs[0].region;
+                                b[2] <= b[0]
+                                    || b[3] <= b[1]
+                                    || b[2] <= ep[0] - 2.0
+                                    || b[0] >= ep[2] + 2.0
+                                    || b[3] <= ep[1] - 2.0
+                                    || b[1] >= ep[3] + 2.0
+                            })))
+            });
+
         lg.stats = LiquidGlassStats {
             epochs: epochs.len(),
             records: records.len(),
@@ -204,6 +304,12 @@ impl Renderer {
         };
         lg.epochs = epochs;
         lg.records = records;
+        lg.epoch0_backdrop_unchanged = epoch0_unchanged;
+        if !epoch0_unchanged {
+            if let Ok(mut g) = lg.cached_epoch.lock() {
+                *g = None;
+            }
+        }
     }
 
     /// Draws one `KIND_LIQUID_GLASS` record at stream index `at`. On an epoch start, splits the
@@ -227,27 +333,6 @@ impl Renderer {
         };
         let (origin, size) = self.target_frame(target);
 
-        let mut use_still = false;
-        if rec.starts_epoch {
-            let ep = &lg.epochs[rec.epoch];
-            let split = pass.split(
-                self,
-                format,
-                origin,
-                size,
-                target.is_some(),
-                Some(ep.region),
-                |encoder, bd| {
-                    lg.encode_epoch(encoder, bd.format, rec.epoch, None);
-                },
-            );
-            if split.is_none() {
-                use_still = true;
-            }
-        } else if !pass.is_owned_splittable() {
-            use_still = true;
-        }
-
         let (r, c) = (instance.rect, instance.clip);
         let edge = |v: f32, o: f32, max: u32| (v - o).clamp(0.0, max as f32) as u32;
         let (x0, y0) = (
@@ -258,6 +343,69 @@ impl Renderer {
             edge((r[0] + r[2]).min(c[2]).ceil(), origin[0], size[0]),
             edge((r[1] + r[3]).min(c[3]).ceil(), origin[1], size[1]),
         );
+        if let Some([bx, by, bw, bh]) = pass.bound() {
+            let (ix0, iy0) = (x0.max(bx), y0.max(by));
+            let (ix1, iy1) = (x1.min(bx + bw), y1.min(by + bh));
+            if ix1 <= ix0 || iy1 <= iy0 {
+                return;
+            }
+        }
+
+        let mut use_still = false;
+        if rec.starts_epoch {
+            let key = (rec.epoch == 0 && target.is_none() && lg.epochs.len() == 1)
+                .then(|| pass.clear_bits())
+                .flatten()
+                .map(|clear| {
+                    let ep = &lg.epochs[0];
+                    let pyramid_size = lg.pyramid.as_ref().map_or([0; 2], |p| p.size);
+                    CachedEpochKey {
+                        format,
+                        viewport: lg.viewport,
+                        clear,
+                        region: ep.region.map(f32::to_bits),
+                        origin: ep.origin.map(f32::to_bits),
+                        size: ep.size,
+                        max_mip: ep.max_mip,
+                        pyramid_size,
+                    }
+                });
+            let reused = key.is_some_and(|k| {
+                lg.epoch0_backdrop_unchanged
+                    && pass.is_owned_splittable()
+                    && self.backdrops.iter().any(|b| b.format == format)
+                    && lg.cached_epoch.lock().ok().is_some_and(|g| *g == Some(k))
+            });
+            if reused {
+                #[cfg(test)]
+                lg.epoch0_reuses
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                let ep = &lg.epochs[rec.epoch];
+                let split = pass.split(
+                    self,
+                    format,
+                    origin,
+                    size,
+                    target.is_some(),
+                    Some(ep.region),
+                    |encoder, bd| {
+                        lg.encode_epoch(encoder, bd.format, rec.epoch, None);
+                    },
+                );
+                if split.is_none() {
+                    use_still = true;
+                    if let Ok(mut g) = lg.cached_epoch.lock() {
+                        *g = None;
+                    }
+                } else if let Ok(mut g) = lg.cached_epoch.lock() {
+                    *g = key;
+                }
+            }
+        } else if !pass.is_owned_splittable() {
+            use_still = true;
+        }
+
         if x1 <= x0 || y1 <= y0 {
             return;
         }
