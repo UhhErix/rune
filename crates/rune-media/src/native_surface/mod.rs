@@ -234,6 +234,19 @@ impl NativeSurface {
         self.0.lock().unwrap().video.clone()
     }
     #[cfg(target_os = "windows")]
+    pub fn seed_opaque_mask(&self, width: u32, height: u32) {
+        let w = width.max(1);
+        let h = height.max(1);
+        let mut px = vec![0u8; (w as usize) * (h as usize) * 4];
+        for chunk in px.chunks_exact_mut(4) {
+            chunk[3] = 255;
+        }
+        drop(self.push_bytes(
+            ByteFrame { width: w, height: h, format: Format::Bgra, color: ColorInfo::default(), planes: [px, Vec::new()] },
+            1,
+        ));
+    }
+    #[cfg(target_os = "windows")]
     pub fn set_external_layer(&self, layer: Option<ExternalLayer>) {
         let wake = {
             let mut s = self.0.lock().unwrap();
@@ -746,5 +759,42 @@ mod tests {
 
         a.push_bytes(synthetic(16, 16, 1), 2).unwrap();
         assert_ne!(s0, base.stamp(), "push_bytes changes stamp");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn external_layer_and_host_track_revisions_and_deliver_events() {
+        let surf = NativeSurface::new();
+        assert!(surf.external_layer().is_none());
+        assert!(!surf.has_external_host());
+
+        let r0 = surf.revision();
+        let layer = ExternalLayer { id: 7, handle: 0x1234 };
+        surf.set_external_layer(Some(layer));
+        let r1 = surf.revision();
+        assert!(r1 > r0);
+        assert_eq!(surf.external_layer(), Some(layer));
+
+        surf.set_external_layer(Some(layer));
+        assert_eq!(surf.revision(), r1, "redundant external layer does not bump revision");
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let recv_cb = Arc::clone(&received);
+        surf.set_external_host(Some(Arc::new(move |ev| {
+            recv_cb.lock().unwrap().push(ev);
+        })));
+        assert!(surf.has_external_host());
+        let ev = ExternalHostEvent { hwnd: 10, dcomp_device: 20, slot_visual: 30, rect: [1, 2, 640, 360] };
+        surf.notify_external_host(ev);
+        assert_eq!(*received.lock().unwrap(), vec![ev]);
+
+        surf.seed_opaque_mask(16, 9);
+        let frame = surf.latest().expect("opaque mask frame");
+        assert_eq!(frame.size, [16, 9]);
+
+        surf.set_external_host(None);
+        assert!(!surf.has_external_host());
+        surf.set_external_layer(None);
+        assert!(surf.external_layer().is_none());
     }
 }

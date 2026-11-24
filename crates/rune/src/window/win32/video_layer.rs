@@ -191,10 +191,12 @@ impl VideoLayers {
                     }
                     if let Some((visual, _)) = &entry.visual {
                         if visual_changed || entry.last_rect != Some(rect) {
+                            // SAFETY: COM calls on a live IDCompositionVisual owned by self.externals.
                             unsafe {
                                 visual.SetOffsetX2(rect[0] as f32).ok();
                                 visual.SetOffsetY2(rect[1] as f32).ok();
                             }
+                            h.clip_rect(visual, rect[2] as f32, rect[3] as f32).ok();
                             entry.last_rect = Some(rect);
                             ext_dirty = true;
                             d.surface.notify_external_host(ExternalHostEvent {

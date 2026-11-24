@@ -48,12 +48,34 @@ impl Handover {
 
     pub(crate) fn device_raw(&self) -> *mut std::ffi::c_void { self.device.as_raw() }
 
+    /// Parents an existing visual directly below the UI's visual so Liquid Glass and floating
+    /// Rune chrome composite over external video and web layers, uncommitted.
+    pub(crate) fn add_under_visual(&self, visual: &IDCompositionVisual) -> Result<(), String> {
+        // SAFETY: COM call on our root visual and a visual from the same DirectComposition device.
+        unsafe {
+            self.root.AddVisual(visual, false, &self.visual).map_err(|e| format!("AddVisual: {e}"))
+        }
+    }
+
     pub(crate) fn add_under_empty(&self) -> Result<IDCompositionVisual, String> {
         // SAFETY: COM calls on our device and visuals.
         unsafe {
             let visual = self.device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
-            self.root.AddVisual(&visual, false, &self.visual).map_err(|e| format!("AddVisual: {e}"))?;
+            self.add_under_visual(&visual)?;
             Ok(visual)
+        }
+    }
+
+    /// Hard-clips an under-visual to `(0, 0, width, height)` in its local coordinates, uncommitted.
+    pub(crate) fn clip_rect(&self, visual: &IDCompositionVisual, width: f32, height: f32) -> Result<(), String> {
+        // SAFETY: COM calls on our device and visual.
+        unsafe {
+            let clip = self.device.CreateRectangleClip().map_err(|e| format!("CreateRectangleClip: {e}"))?;
+            clip.SetLeft2(0.0).map_err(|e| format!("SetLeft2: {e}"))?;
+            clip.SetTop2(0.0).map_err(|e| format!("SetTop2: {e}"))?;
+            clip.SetRight2(width.max(1.0)).map_err(|e| format!("SetRight2: {e}"))?;
+            clip.SetBottom2(height.max(1.0)).map_err(|e| format!("SetBottom2: {e}"))?;
+            visual.SetClip(&clip).map_err(|e| format!("SetClip: {e}"))
         }
     }
 
@@ -76,7 +98,7 @@ impl Handover {
             let surface = self.device.CreateSurfaceFromHandle(windows::Win32::Foundation::HANDLE(handle as *mut _)).map_err(|e| format!("CreateSurfaceFromHandle: {e}"))?;
             let visual = self.device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
             visual.SetContent(&surface).map_err(|e| format!("SetContent: {e}"))?;
-            self.root.AddVisual(&visual, false, &self.visual).map_err(|e| format!("AddVisual: {e}"))?;
+            self.add_under_visual(&visual)?;
             Ok(visual)
         }
     }
