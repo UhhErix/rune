@@ -239,9 +239,13 @@ struct SdfHit {
 };
 
 fn eval_sdf(p: vec2<f32>, first: u32, count: u32, k_eff: f32) -> SdfHit {
-    var d = sd_one(p, shapes[first]);
+    var d_first = sd_one(p, shapes[first]);
     var nearest = first;
-    var best_d = d;
+    var best_d = d_first;
+    var cur_group_id = shapes[first].light.z;
+    var group_d = d_first;
+    var total_d = 1e9;
+    var has_total = false;
     for (var idx = 1u; idx < count; idx++) {
         let si = first + idx;
         let di = sd_one(p, shapes[si]);
@@ -249,24 +253,24 @@ fn eval_sdf(p: vec2<f32>, first: u32, count: u32, k_eff: f32) -> SdfHit {
             best_d = di;
             nearest = si;
         }
-        // Shapes sharing an explicit glass_union id merge seamlessly even when container spacing is 0.
-        let same_union = shapes[si].light.z > 0.5 && shapes[si].light.z == shapes[nearest].light.z;
-        let k = select(k_eff, max(k_eff, 4.0), same_union);
-        d = smin(d, di, k);
+        let uid = shapes[si].light.z;
+        // Shapes sharing a non-zero `glass_union` id are sorted contiguously by the painter and
+        // merge seamlessly even at `spacing == 0`; distinct union groups only blend by `k_eff`.
+        if (uid > 0.5 && uid == cur_group_id) {
+            group_d = smin(group_d, di, max(k_eff, 20.0));
+        } else {
+            total_d = select(group_d, smin(total_d, group_d, k_eff), has_total);
+            has_total = true;
+            cur_group_id = uid;
+            group_d = di;
+        }
     }
-    return SdfHit(d, nearest);
+    let final_d = select(group_d, smin(total_d, group_d, k_eff), has_total);
+    return SdfHit(final_d, nearest);
 }
 
 fn eval_sdf_only(p: vec2<f32>, first: u32, count: u32, k_eff: f32) -> f32 {
-    var d = sd_one(p, shapes[first]);
-    for (var idx = 1u; idx < count; idx++) {
-        let si = first + idx;
-        let di = sd_one(p, shapes[si]);
-        let same_union = shapes[si].light.z > 0.5 && shapes[si].light.z == shapes[first].light.z;
-        let k = select(k_eff, max(k_eff, 4.0), same_union);
-        d = smin(d, di, k);
-    }
-    return d;
+    return eval_sdf(p, first, count, k_eff).d;
 }
 
 // Bevel dome height profile adapted from bilalgursen/liquid-glass (MIT).
@@ -332,18 +336,19 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     let reduced_trans = (flags & 16u) != 0u;
     let inc_contrast = (flags & 32u) != 0u;
     let has_tint = (flags & 64u) != 0u;
+    let blur_only = (flags & 128u) != 0u;
 
     let center = s.rect.xy + s.rect.zw * 0.5;
     let half = s.rect.zw * 0.5;
     let bevel = max(s.bend.x, 1.0);
     let inside = max(-d, 0.0);
 
-    // Bevel height-field normal & SDF outward direction (computed only near bevel/rim so large flat
-    // interiors skip the 4 finite-difference SDF taps).
+    // Bevel height-field normal & SDF outward direction (computed only near bevel/rim and skipped
+    // entirely in low-end `BlurOnly` mode so iGPUs avoid the 4 finite-difference SDF taps).
     var dir = vec2<f32>(0.0, -1.0);
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     let bend_depth = min(min(half.x, half.y), bevel / 0.17);
-    let near_edge = inside < max(bend_depth, bevel * 1.5) + 4.0;
+    let near_edge = !blur_only && inside < max(bend_depth, bevel * 1.5) + 4.0;
     if (near_edge) {
         let e = 0.75;
         let dx_p = eval_sdf_only(p + vec2<f32>(e, 0.0), first, count, k_eff);
@@ -362,10 +367,9 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     }
 
     // Subtle inward rim refraction: ratio^8 with smoothstep falloff at the outer edge
-    // (adapted from bilalgursen/liquid-glass, MIT). Zero distortion in the flat centre,
-    // monotone smooth sub-pixel progression at 1080p.
+    // (adapted from bilalgursen/liquid-glass, MIT). Disabled in `BlurOnly` and Reduce Transparency.
     var bend = vec2<f32>(0.0);
-    if (s.bend.y > 0.001 && near_edge) {
+    if (!blur_only && !reduced_trans && s.bend.y > 0.001 && near_edge) {
         let ratio = clamp(1.0 - inside / max(bend_depth, 1.0), 0.0, 1.0);
         let r2 = ratio * ratio;
         let r4 = r2 * r2;
@@ -379,7 +383,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     var c: vec3<f32>;
     if (epoch.flags.x > 0.5) {
         c = in.still.rgb;
-    } else if (s.bend.z > 0.0005 && dot(bend, bend) > 0.0025) {
+    } else if (!blur_only && !reduced_trans && s.bend.z > 0.0005 && dot(bend, bend) > 0.0025) {
         let disp = s.bend.z;
         let cr = frost_at(p + bend * (1.0 - disp), sigma).r;
         let cg = frost_at(p + bend, sigma).g;
@@ -400,6 +404,12 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
             let l_web = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
             c = clamp(mix(vec3<f32>(l_web), c, sat), vec3<f32>(0.0), vec3<f32>(1.0));
             c = c * (1.0 - s.tint.a) + s.tint.rgb;
+            if (reduced_trans) {
+                c = mix(c, in.still.rgb, 0.88);
+            }
+            if (inc_contrast) {
+                c = mix(c, vec3<f32>(0.0), 0.35);
+            }
         } else {
             let l_sat = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
             c = clamp(mix(vec3<f32>(l_sat), c, sat), vec3<f32>(0.0), vec3<f32>(1.0));
@@ -409,33 +419,45 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                 let bright = select(smoothstep(0.30, 0.70, bg_l), 1.0, is_large);
                 var light_mix = 0.20;
                 var dark_mix = 0.24;
-                if (reduced_trans) {
-                    light_mix = 0.75;
-                    dark_mix = 0.75;
-                }
                 if (inc_contrast) {
-                    light_mix = 0.90;
-                    dark_mix = 0.90;
+                    // Darker tint + high contrast separation under Increase Contrast.
+                    light_mix = 0.78;
+                    dark_mix = 0.92;
                 }
                 let dark_col = mix(c, vec3<f32>(0.0), dark_mix);
                 let light_col = mix(c, vec3<f32>(1.0), light_mix);
                 c = mix(dark_col, light_col, bright);
+                if (reduced_trans) {
+                    // Solid frosted fill (>= 88% opaque) anchored to the shape's overall backdrop
+                    // luminance so sharp background splits flatten cleanly under Reduce Transparency.
+                    let cpuv = (center - epoch.pyramid_map.xy) * epoch.pyramid_map.zw;
+                    let c5_center = textureSampleLevel(frost, smp, clamp_pyramid_uv(cpuv, 5.0), 5.0).rgb;
+                    let center_l = select(dot(c5_center, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.5, epoch.flags.x >= 0.5);
+                    let solid_frost = mix(vec3<f32>(0.16), vec3<f32>(0.90), select(smoothstep(0.35, 0.65, center_l), 1.0, is_large));
+                    c = mix(c, solid_frost, 0.88);
+                }
+                if (inc_contrast) {
+                    c = mix(c, vec3<f32>(0.0), select(0.28, 0.14, bright > 0.5));
+                }
             } else {
                 // Apple Clear: 35% dark dimming over bright backdrops (HIG Materials).
                 let dim_a = 0.35 * smoothstep(0.35, 0.65, bg_l);
                 c = mix(c, vec3<f32>(0.0), dim_a);
                 if (reduced_trans) {
-                    let target_tone = select(vec3<f32>(0.0), vec3<f32>(1.0), bg_l > 0.5);
-                    c = mix(c, target_tone, 0.75);
+                    let cpuv = (center - epoch.pyramid_map.xy) * epoch.pyramid_map.zw;
+                    let c5_center = textureSampleLevel(frost, smp, clamp_pyramid_uv(cpuv, 5.0), 5.0).rgb;
+                    let center_l = select(dot(c5_center, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.5, epoch.flags.x >= 0.5);
+                    let solid_frost = mix(vec3<f32>(0.14), vec3<f32>(0.88), smoothstep(0.35, 0.65, center_l));
+                    c = mix(c, solid_frost, 0.88);
                 }
                 if (inc_contrast) {
-                    let target_tone = select(vec3<f32>(0.0), vec3<f32>(1.0), bg_l > 0.5);
-                    c = mix(c, target_tone, 0.90);
+                    c = mix(c, vec3<f32>(0.0), 0.55);
                 }
             }
             if (has_tint) {
                 let mapped_tint = mix(s.tint.rgb * 0.75, s.tint.rgb, bg_l);
-                c = mix(c, mapped_tint, s.tint.a);
+                let tint_a = select(s.tint.a, min(s.tint.a + 0.20, 0.92), inc_contrast);
+                c = mix(c, mapped_tint, tint_a);
             }
         }
     }
@@ -456,40 +478,45 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     }
 
     // Rim light + Fresnel pow 6 + cursor-leaning two-lobe specular highlight.
-    // Smooth inner falloff prevents 1-px Nyquist beading along curved edges at 1x (1080p).
-    let fresnel = pow(clamp(1.0 - normal.z, 0.0, 1.0), 6.0);
+    // In low-end `BlurOnly` mode, emit a cheap constant hairline rim without Fresnel/specular ALU.
     let rim_w = max(1.0, s.rim.w);
     let ring = clamp(0.5 - d, 0.0, 1.0) * (1.0 - smoothstep(0.45, 0.45 + rim_w, -d));
-    let studio_dir = vec2<f32>(cos(s.light.x), sin(s.light.x));
-    let studio_cos = dot(dir, studio_dir);
-    let s_facing = clamp(studio_cos, 0.0, 1.0);
-    let s_away = clamp(-studio_cos, 0.0, 1.0);
-    // Two opposing specular lobes along the light axis (primary 1.0, opposite 0.45, 90 deg 0.10).
-    let studio_lobes = 0.10 + 0.90 * (s_facing * s_facing * s_facing) + 0.45 * (s_away * s_away * s_away);
-    let studio_fresnel = 0.14 + 0.66 * s_facing + 0.25 * s_away;
-    var lobes = studio_lobes;
-    var fresnel_w = studio_fresnel;
-    if (cursor_light && epoch.pointer.z > 0.001) {
-        let to_cursor = epoch.pointer.xy - center;
-        let cl = length(to_cursor);
-        if (cl > 1.0) {
-            let cursor_dir = to_cursor / cl;
-            let cursor_cos = dot(dir, cursor_dir);
-            let c_facing = clamp(cursor_cos, 0.0, 1.0);
-            let c_away = clamp(-cursor_cos, 0.0, 1.0);
-            let aimed_lobes = 0.08 + 1.00 * (c_facing * c_facing * c_facing) + 0.20 * (c_away * c_away * c_away);
-            let aimed_fresnel = 0.10 + 0.80 * c_facing + 0.10 * c_away;
-            let lean = clamp(epoch.pointer.z * 0.65, 0.0, 0.65);
-            lobes = mix(studio_lobes, aimed_lobes, lean);
-            fresnel_w = mix(studio_fresnel, aimed_fresnel, lean);
+    if (blur_only) {
+        let simple_lit = clamp(s.rim.x * ring * materialize, 0.0, 1.0);
+        c = clamp(c * (1.0 - simple_lit * 0.20) + s.rim_c.rgb * simple_lit, vec3<f32>(0.0), vec3<f32>(1.0));
+    } else {
+        let fresnel = pow(clamp(1.0 - normal.z, 0.0, 1.0), 6.0);
+        let studio_dir = vec2<f32>(cos(s.light.x), sin(s.light.x));
+        let studio_cos = dot(dir, studio_dir);
+        let s_facing = clamp(studio_cos, 0.0, 1.0);
+        let s_away = clamp(-studio_cos, 0.0, 1.0);
+        // Two opposing specular lobes along the light axis (primary 1.0, opposite 0.45, 90 deg 0.10).
+        let studio_lobes = 0.10 + 0.90 * (s_facing * s_facing * s_facing) + 0.45 * (s_away * s_away * s_away);
+        let studio_fresnel = 0.14 + 0.66 * s_facing + 0.25 * s_away;
+        var lobes = studio_lobes;
+        var fresnel_w = studio_fresnel;
+        if (cursor_light && epoch.pointer.z > 0.001) {
+            let to_cursor = epoch.pointer.xy - center;
+            let cl = length(to_cursor);
+            if (cl > 1.0) {
+                let cursor_dir = to_cursor / cl;
+                let cursor_cos = dot(dir, cursor_dir);
+                let c_facing = clamp(cursor_cos, 0.0, 1.0);
+                let c_away = clamp(-cursor_cos, 0.0, 1.0);
+                let aimed_lobes = 0.08 + 1.00 * (c_facing * c_facing * c_facing) + 0.20 * (c_away * c_away * c_away);
+                let aimed_fresnel = 0.10 + 0.80 * c_facing + 0.10 * c_away;
+                let lean = clamp(epoch.pointer.z * 0.65, 0.0, 0.65);
+                lobes = mix(studio_lobes, aimed_lobes, lean);
+                fresnel_w = mix(studio_fresnel, aimed_fresnel, lean);
+            }
         }
+        let edge_a = select(mix(s.rim.y, s.rim.z, max(dir.y, 0.0)), mix(s.rim.y, s.rim.x, max(-dir.y, 0.0)), dir.y < 0.0);
+        let spec_strength = s.rim_c.a;
+        let rim_hit = edge_a * lobes * ring * (0.45 + 0.55 * spec_strength);
+        let fresnel_hit = fresnel * fresnel_w * spec_strength * 0.32;
+        let lit = clamp((rim_hit + fresnel_hit) * materialize, 0.0, 1.0);
+        c = clamp(c * (1.0 - lit * 0.25) + s.rim_c.rgb * lit, vec3<f32>(0.0), vec3<f32>(1.0));
     }
-    let edge_a = select(mix(s.rim.y, s.rim.z, max(dir.y, 0.0)), mix(s.rim.y, s.rim.x, max(-dir.y, 0.0)), dir.y < 0.0);
-    let spec_strength = s.rim_c.a;
-    let rim_hit = edge_a * lobes * ring * (0.45 + 0.55 * spec_strength);
-    let fresnel_hit = fresnel * fresnel_w * spec_strength * 0.32;
-    let lit = clamp((rim_hit + fresnel_hit) * materialize, 0.0, 1.0);
-    c = clamp(c * (1.0 - lit * 0.25) + s.rim_c.rgb * lit, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Interactive hover brighten (+0.05) and radial touch glow from pointer contact.
     if (s.extra.z > 0.001) {
@@ -502,12 +529,12 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         c = clamp(c + vec3<f32>(boost), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
-    // Increase Contrast: 1 pt contrasting border in the opposite tone at 0.60 alpha.
+    // Increase Contrast: solid high-contrast rim in the opposite tone at 0.95 alpha.
     if (inc_contrast) {
-        let border_w = max(1.0, in.params.w);
+        let border_w = max(1.5, 1.5 * in.params.w);
         let b_ring = clamp(0.5 - d, 0.0, 1.0) - clamp(0.5 - (d + border_w), 0.0, 1.0);
-        let b_col = select(vec3<f32>(1.0), vec3<f32>(0.0), bg_l > 0.5);
-        c = mix(c, b_col, b_ring * 0.60);
+        let b_col = select(vec3<f32>(1.0), vec3<f32>(0.0), bg_l > 0.55);
+        c = mix(c, b_col, b_ring * 0.95);
     }
 
     // Convert back to linear if rendering into an *Srgb target (`target_is_srgb > 0.5`).

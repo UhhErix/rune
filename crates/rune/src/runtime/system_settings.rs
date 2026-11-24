@@ -72,6 +72,33 @@ impl window_requests::HostState {
         true
     }
 
+    pub(super) fn set_glass_adapter_info(&mut self, info: &wgpu::AdapterInfo, on_battery: bool) -> bool {
+        let adapter = crate::render::liquid_glass::budget::classify_adapter(info);
+        let power = if on_battery {
+            crate::render::liquid_glass::budget::PowerState::Battery
+        } else {
+            crate::render::liquid_glass::budget::PowerState::Ac
+        };
+        self.glass_budget.configure(adapter, power)
+    }
+
+    pub(super) fn set_glass_power_battery(&mut self, on_battery: bool) -> bool {
+        let power = if on_battery {
+            crate::render::liquid_glass::budget::PowerState::Battery
+        } else {
+            crate::render::liquid_glass::budget::PowerState::Ac
+        };
+        self.glass_budget.set_power(power)
+    }
+
+    pub(super) fn record_glass_frame_ms(&mut self, ms: f32) -> bool {
+        self.glass_budget.record_frame_ms(ms)
+    }
+
+    pub(super) fn set_glass_tier_override(&mut self, tier: Option<crate::GlassTier>) -> bool {
+        self.glass_budget.set_override(tier)
+    }
+
     /// Updates smoothed backdrop luminance for each `(glass_id, luma)` probe sample. Returns true
     /// if any shape's `is_dark` state flipped across its hysteresis threshold.
     pub(super) fn apply_glass_probes(&mut self, samples: &[(String, f32)], dt: f32) -> bool {
@@ -232,14 +259,41 @@ impl RuntimeCore {
     pub fn system_reduced_transparency(&self) -> bool {
         self.host.system_reduced_transparency
     }
-    /// Whether live Liquid Glass is currently active under the configured policy and OS settings.
+    /// Configures the Liquid Glass hardware budget from the active GPU adapter and battery state.
+    pub fn set_glass_adapter_info(&mut self, info: &wgpu::AdapterInfo, on_battery: bool) {
+        if self.host.set_glass_adapter_info(info, on_battery) { self.commit.dirty = true; }
+    }
+    /// Updates the host battery state for iGPU Liquid Glass auto-downgrade.
+    pub fn set_glass_power_battery(&mut self, on_battery: bool) {
+        if self.host.set_glass_power_battery(on_battery) { self.commit.dirty = true; }
+    }
+    /// Feeds a measured Liquid Glass GPU frame duration (ms) into the auto-downgrade controller.
+    pub fn record_glass_frame_ms(&mut self, ms: f32) {
+        if self.host.record_glass_frame_ms(ms) { self.commit.dirty = true; }
+    }
+    /// Forces a specific [`GlassTier`] (or clears the override with `None`).
+    pub fn set_glass_tier_override(&mut self, tier: Option<crate::GlassTier>) {
+        if self.host.set_glass_tier_override(tier) { self.commit.dirty = true; }
+    }
+    /// Active hardware-budgeted [`GlassTier`] (`Full`, `BlurOnly`, or `Solid`).
+    #[inline]
+    pub fn glass_tier(&self) -> crate::GlassTier {
+        self.host.glass_budget.tier()
+    }
+    /// Whether live Liquid Glass is currently active under the configured policy, OS settings and hardware tier.
     #[inline]
     pub fn glass_on(&self) -> bool {
         if self.host.system_contrast.is_some() { return false; }
+        let tier = self.host.glass_budget.tier();
         match self.host.glass_policy {
-            crate::GlassPolicy::Glass => true,
             crate::GlassPolicy::Solid => false,
-            crate::GlassPolicy::FollowSystem => !self.host.system_reduced_transparency && !self.host.system_increased_contrast,
+            crate::GlassPolicy::BlurOnly => true,
+            crate::GlassPolicy::Glass => tier != crate::GlassTier::Solid,
+            crate::GlassPolicy::FollowSystem | crate::GlassPolicy::Auto => {
+                tier != crate::GlassTier::Solid
+                    && !self.host.system_reduced_transparency
+                    && !self.host.system_increased_contrast
+            }
         }
     }
     /// Smoothed backdrop dark/light classification for an element tagged with `El::glass_id(id)`.

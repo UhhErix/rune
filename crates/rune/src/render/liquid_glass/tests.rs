@@ -1,6 +1,5 @@
 //! Unit and GPU pixel tests for Liquid Glass (`El::liquid_glass`).
 
-use crate::render::liquid_glass::pyramid::pyramid_bytes;
 use crate::render::{
     Gpu, KIND_BACKDROP_BLUR, KIND_LAYER, KIND_LIQUID_GLASS, OFFSCREEN_FORMAT, Offscreen, Renderer,
     cpu_boot,
@@ -74,7 +73,7 @@ fn no_cap_on_70_liquid_glass_elements_and_backdrop_blur_cap_preserved() {
         .count();
     assert_eq!(lg_recs, 3);
 
-    // Verify backdrop_blur still respects default 4 and configurable 16 cap.
+    // Verify backdrop_blur defaults to uncapped (usize::MAX, dynamic growth) and honors explicit caps.
     let mut rt_blur = Runtime::new(
         (),
         |_: &(), _: &mut Cx<()>| {
@@ -98,10 +97,20 @@ fn no_cap_on_70_liquid_glass_elements_and_backdrop_blur_cap_preserved() {
             .iter()
             .filter(|i| i.params[1] == KIND_BACKDROP_BLUR)
             .count(),
-        crate::MAX_BACKDROP_BLURS
+        10
+    );
+    rt_blur.set_max_backdrop_blurs(4);
+    rt_blur.frame(0.016);
+    assert_eq!(
+        rt_blur
+            .instances
+            .iter()
+            .filter(|i| i.params[1] == KIND_BACKDROP_BLUR)
+            .count(),
+        4
     );
     rt_blur.set_max_backdrop_blurs(16);
-    rt_blur.frame(0.0);
+    rt_blur.frame(0.032);
     assert_eq!(
         rt_blur
             .instances

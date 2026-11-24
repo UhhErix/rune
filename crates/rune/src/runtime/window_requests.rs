@@ -20,6 +20,8 @@ pub(crate) struct HostState {
     pub(in crate::runtime) system_reduced_transparency: bool,
     /// Active Liquid Glass policy (`App::glass`, `Tx::set_glass_policy`).
     pub(in crate::runtime) glass_policy: crate::GlassPolicy,
+    /// Low-end GPU safety controller (`Full -> BlurOnly -> Solid` by adapter, battery & cost).
+    pub(in crate::runtime) glass_budget: crate::render::liquid_glass::budget::GlassBudget,
     /// Smoothed backdrop luminance probe state per `El::glass_id`: `(smoothed_l, is_dark)`.
     pub(in crate::runtime) glass_probes: HashMap<String, (f32, bool)>,
     /// Snapshot of `is_dark` by `El::glass_id`, shared with `Cx::glass_is_dark`.
@@ -83,6 +85,7 @@ impl HostState {
             system_increased_contrast: false,
             system_reduced_transparency: false,
             glass_policy: crate::GlassPolicy::FollowSystem,
+            glass_budget: Default::default(),
             glass_probes: HashMap::default(),
             glass_dark: std::rc::Rc::new(HashMap::default()),
             scroll_bars: Default::default(),

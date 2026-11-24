@@ -79,6 +79,16 @@ pub fn scrim<S: 'static>(key: impl Into<String>, close: impl Fn(&mut S) + 'stati
     el().key(key).role("none").absolute(0.0, 0.0).w_full().h_full().on_press(close)
 }
 
+/// A tinted full-window modal scrim that dims the underlying room (keeping it visible, never solid
+/// black) and dismisses on outside press.
+pub fn modal_scrim<S: 'static>(
+    key: impl Into<String>,
+    color: rune::Color,
+    close: impl Fn(&mut S) + 'static,
+) -> El {
+    scrim(key, close).fill(color)
+}
+
 /// Makes an open surface modal: it takes focus, Escape and outside presses dismiss it, and
 /// focus returns to the trigger when it closes.
 pub(crate) type Modal = Box<dyn FnOnce(El) -> El>;

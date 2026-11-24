@@ -3,13 +3,27 @@
 //! Run with `--profile perf`:
 //!   cargo run --locked --profile perf -p rune --example liquid_glass_bench
 //!
-//! Compares paired, alternating `GlassPolicy::Solid` vs `GlassPolicy::Glass` GPU render passes
-//! via `wgpu::Features::TIMESTAMP_QUERY` and reports median, p95, and max (keeping outliers).
-//! Note: headless GPU timestamps measure adapter execution of the render passes and omit host
-//! CPU-to-GPU upload overhead and swapchain presentation.
+//! Compares paired, alternating `GlassPolicy::Solid` vs `GlassPolicy::Glass` (and `BlurOnly`) GPU
+//! render passes via `wgpu::Features::TIMESTAMP_QUERY` (or wall-clock `submit + poll` when an
+//! adapter such as WARP lacks timestamp queries), reporting median, p95, and max (keeping outliers).
+//! Note: headless benchmarks omit host CPU-to-GPU upload overhead and swapchain presentation.
+
+use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
-use rune::{Color, Cx, El, Env, GlassPolicy, LiquidGlass, Runtime, el};
+use rune::{Color, Cx, El, Env, GlassPolicy, GlassTier, LiquidGlass, Runtime, el};
+
+fn probe_auto_tier(info: &wgpu::AdapterInfo, on_battery: bool) -> GlassTier {
+    let mut rt = Runtime::new(
+        (),
+        |_: &(), _: &mut Cx<()>| el().size(16.0, 16.0),
+        (16.0, 16.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_glass_policy(GlassPolicy::Auto);
+    rt.set_glass_adapter_info(info, on_battery);
+    rt.glass_tier()
+}
 
 const W: u32 = 1920;
 const H: u32 = 1080;
@@ -82,6 +96,38 @@ fn build_scene(kind: usize) -> El {
             );
         }
         3 => {
+            // 4 glass layers on screen at 1920x1080: top nav bar, side rail, main card, dock.
+            root = root
+                .child(
+                    el().key("layer-nav")
+                        .absolute(24.0, 20.0)
+                        .size(1872.0, 56.0)
+                        .radius(18.0)
+                        .liquid_glass(LiquidGlass::control()),
+                )
+                .child(
+                    el().key("layer-rail")
+                        .absolute(24.0, 96.0)
+                        .size(280.0, 860.0)
+                        .radius(22.0)
+                        .liquid_glass(LiquidGlass::pane()),
+                )
+                .child(
+                    el().key("layer-card")
+                        .absolute(340.0, 140.0)
+                        .size(920.0, 560.0)
+                        .radius(28.0)
+                        .liquid_glass(LiquidGlass::panel()),
+                )
+                .child(
+                    el().key("layer-dock")
+                        .absolute(520.0, 968.0)
+                        .size(880.0, 84.0)
+                        .radius(28.0)
+                        .liquid_glass(LiquidGlass::regular()),
+                );
+        }
+        4 => {
             let mut layer0 = el().size(W as f32, H as f32).glass_group();
             for i in 0..4 {
                 layer0 = layer0.child(
@@ -126,7 +172,7 @@ fn build_scene(kind: usize) -> El {
                 .liquid_glass(LiquidGlass::regular());
             root = root.child(layer0).child(dock).child(mini).child(popover);
         }
-        4 => {
+        5 => {
             let mut group = el().size(W as f32, H as f32).glass_group();
             for i in 0..64 {
                 let col = (i % 8) as f32;
@@ -156,9 +202,232 @@ fn build_scene(kind: usize) -> El {
     root
 }
 
+fn prep_renderer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    kind: usize,
+    policy: GlassPolicy,
+) -> Renderer {
+    let mut rt = Runtime::new(
+        kind,
+        |&k: &usize, _: &mut Cx<usize>| build_scene(k),
+        (W as f32, H as f32),
+        Env::new(true, 1.0),
+    );
+    rt.set_glass_policy(policy);
+    rt.frame(0.0);
+    let mut ren = Renderer::new(device, OFFSCREEN_FORMAT);
+    ren.set_liquid_glass(rt.liquid_glass_frame());
+    ren.prepare(device, queue, &mut rt.text.atlas, &rt.instances, (W, H));
+    ren
+}
+
+fn run_pair_timestamp(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &Offscreen,
+    queries: &wgpu::QuerySet,
+    resolve: &wgpu::Buffer,
+    read: &wgpu::Buffer,
+    period_ms: f64,
+    ren_solid: &mut Renderer,
+    ren_test: &mut Renderer,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let total_queries = (TOTAL * 4) as u32;
+    let resolve_bytes = u64::from(total_queries) * 8;
+    for iter in 0..TOTAL {
+        let base_q = (iter * 4) as u32;
+        let order: [(u32, bool); 2] = if iter % 2 == 0 {
+            [(0, false), (2, true)]
+        } else {
+            [(2, true), (0, false)]
+        };
+        for (slot, is_test) in order {
+            let ren = if is_test {
+                &mut *ren_test
+            } else {
+                &mut *ren_solid
+            };
+            let mut enc = device.create_command_encoder(&Default::default());
+            ren.draw_timed(
+                &mut enc,
+                &target.view,
+                [0.0; 4],
+                Some(wgpu::RenderPassTimestampWrites {
+                    query_set: queries,
+                    beginning_of_pass_write_index: Some(base_q + slot),
+                    end_of_pass_write_index: Some(base_q + slot + 1),
+                }),
+            );
+            ren.submit(queue, enc);
+            drop(device.poll(wgpu::PollType::wait_indefinitely()));
+        }
+    }
+
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.resolve_query_set(queries, 0..total_queries, resolve, 0);
+    enc.copy_buffer_to_buffer(resolve, 0, read, 0, resolve_bytes);
+    queue.submit([enc.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    drop(device.poll(wgpu::PollType::wait_indefinitely()));
+
+    let (mut solid_ms, mut test_ms, mut delta_ms) = (Vec::new(), Vec::new(), Vec::new());
+    {
+        let bytes = read.slice(..).get_mapped_range().unwrap();
+        for pair in bytes.chunks_exact(32).skip(WARMUP) {
+            let s0 = u64::from_le_bytes(pair[0..8].try_into().unwrap());
+            let s1 = u64::from_le_bytes(pair[8..16].try_into().unwrap());
+            let g0 = u64::from_le_bytes(pair[16..24].try_into().unwrap());
+            let g1 = u64::from_le_bytes(pair[24..32].try_into().unwrap());
+            let sm = (s1.saturating_sub(s0)) as f64 * period_ms;
+            let gm = (g1.saturating_sub(g0)) as f64 * period_ms;
+            solid_ms.push(sm);
+            test_ms.push(gm);
+            delta_ms.push(gm - sm);
+        }
+    }
+    read.unmap();
+    (solid_ms, test_ms, delta_ms)
+}
+
+fn run_pair_wall(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &Offscreen,
+    warmup: usize,
+    samples: usize,
+    ren_solid: &mut Renderer,
+    ren_test: &mut Renderer,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let (mut solid_ms, mut test_ms, mut delta_ms) = (Vec::new(), Vec::new(), Vec::new());
+    for iter in 0..(warmup + samples) {
+        let mut s_val = 0.0;
+        let mut t_val = 0.0;
+        let order = if iter % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        };
+        for is_test in order {
+            let ren = if is_test {
+                &mut *ren_test
+            } else {
+                &mut *ren_solid
+            };
+            let t0 = Instant::now();
+            let mut enc = device.create_command_encoder(&Default::default());
+            ren.draw(&mut enc, &target.view, [0.0; 4]);
+            ren.submit(queue, enc);
+            drop(device.poll(wgpu::PollType::wait_indefinitely()));
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if is_test {
+                t_val = ms;
+            } else {
+                s_val = ms;
+            }
+        }
+        if iter >= warmup {
+            solid_ms.push(s_val);
+            test_ms.push(t_val);
+            delta_ms.push(t_val - s_val);
+        }
+    }
+    (solid_ms, test_ms, delta_ms)
+}
+
+fn print_row(
+    name: &str,
+    surfaces: usize,
+    stats: rune::render::LiquidGlassStats,
+    mut solid_ms: Vec<f64>,
+    mut test_ms: Vec<f64>,
+    mut delta_ms: Vec<f64>,
+) {
+    solid_ms.sort_by(f64::total_cmp);
+    test_ms.sort_by(f64::total_cmp);
+    delta_ms.sort_by(f64::total_cmp);
+    let med = |v: &[f64]| v[v.len() / 2];
+    let p95 = |v: &[f64]| v[((v.len() * 95) / 100).min(v.len() - 1)];
+    let max = |v: &[f64]| *v.last().unwrap();
+    let d_med = med(&delta_ms);
+    let per_surface = d_med / surfaces as f64;
+    println!(
+        "  {name:<30} surfaces={surfaces:>2} epochs={:>2} py={:.2}MB | solid={:.3}ms test={:.3}ms | delta med={:.3}ms ({:.3}ms/surf) p95={:.3}ms max={:.3}ms",
+        stats.epochs,
+        stats.pyramid_bytes as f64 / (1024.0 * 1024.0),
+        med(&solid_ms),
+        med(&test_ms),
+        d_med,
+        per_surface,
+        p95(&delta_ms),
+        max(&delta_ms),
+    );
+}
+
+fn bench_secondary_adapter(adapter: &wgpu::Adapter) {
+    let info = adapter.get_info();
+    let auto_ac = probe_auto_tier(&info, false);
+    let auto_bat = probe_auto_tier(&info, true);
+    let is_software = info.device_type == wgpu::DeviceType::Cpu
+        || info
+            .name
+            .to_ascii_lowercase()
+            .contains("basic render driver");
+    let req_features = if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        wgpu::Features::TIMESTAMP_QUERY
+    } else {
+        wgpu::Features::empty()
+    };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("lg secondary bench"),
+        required_features: req_features,
+        required_limits: adapter.limits(),
+        memory_hints: Default::default(),
+        trace: Default::default(),
+        experimental_features: Default::default(),
+    })) else {
+        println!(
+            "\nSecondary adapter {} ({:?}): failed to open device",
+            info.name, info.backend
+        );
+        return;
+    };
+    let has_ts = device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+    let method = if has_ts {
+        "wall submit+poll (TIMESTAMP_QUERY available)"
+    } else {
+        "wall submit+poll (no TIMESTAMP_QUERY)"
+    };
+    println!(
+        "\nSecondary adapter 1920x1080 bench ({method}; omits upload & swapchain present): {} ({:?}, type={:?}, auto_ac={:?}, auto_battery={:?})",
+        info.name, info.backend, info.device_type, auto_ac, auto_bat,
+    );
+    let target = Offscreen::new(&device, W, H);
+    let (warmup, samples) = if is_software { (2, 8) } else { (6, 24) };
+    for &(label, policy) in &[
+        ("four_layers_1080p [Full]", GlassPolicy::Glass),
+        ("four_layers_1080p [BlurOnly]", GlassPolicy::BlurOnly),
+    ] {
+        let mut ren_solid = prep_renderer(&device, &queue, 3, GlassPolicy::Solid);
+        let mut ren_test = prep_renderer(&device, &queue, 3, policy);
+        let stats = ren_test.liquid_glass_stats();
+        let (s, t, d) = run_pair_wall(
+            &device,
+            &queue,
+            &target,
+            warmup,
+            samples,
+            &mut ren_solid,
+            &mut ren_test,
+        );
+        print_row(label, 4, stats, s, t, d);
+    }
+}
+
 fn main() {
     let gpu = Gpu::headless();
     let info = gpu.adapter.get_info();
+    let auto_tier = probe_auto_tier(&info, false);
     assert!(
         gpu.device
             .features()
@@ -168,18 +437,26 @@ fn main() {
     );
     let period_ms = f64::from(gpu.queue.get_timestamp_period()) / 1e6;
     println!(
-        "Liquid Glass 1920x1080 GPU bench (headless; omits upload & swapchain present): {} ({:?})",
-        info.name, info.backend
+        "Liquid Glass 1920x1080 GPU bench (headless TIMESTAMP_QUERY; omits upload & swapchain present): {} ({:?}, type={:?}, auto_tier={:?})",
+        info.name, info.backend, info.device_type, auto_tier,
     );
 
     let target = Offscreen::new(&gpu.device, W, H);
-    let scenarios: &[(&str, usize, usize)] = &[
-        ("single_regular_480x160", 0, 1),
-        ("single_control_480x160", 1, 1),
-        ("single_panel_960x540", 2, 1),
-        ("exo_16_surfaces_3_epochs", 3, 16),
-        ("stress_64_grouped", 4, 64),
-        ("ungrouped_16_overlapping", 5, 16),
+    let scenarios: &[(&str, usize, usize, GlassPolicy)] = &[
+        ("single_regular_480x160", 0, 1, GlassPolicy::Glass),
+        ("single_control_480x160", 1, 1, GlassPolicy::Glass),
+        ("single_panel_960x540", 2, 1, GlassPolicy::Glass),
+        (
+            "single_panel_960x540 [BlurOnly]",
+            2,
+            1,
+            GlassPolicy::BlurOnly,
+        ),
+        ("four_layers_1080p [Full]", 3, 4, GlassPolicy::Glass),
+        ("four_layers_1080p [BlurOnly]", 3, 4, GlassPolicy::BlurOnly),
+        ("exo_16_surfaces_3_epochs", 4, 16, GlassPolicy::Glass),
+        ("stress_64_grouped", 5, 64, GlassPolicy::Glass),
+        ("ungrouped_16_overlapping", 6, 16, GlassPolicy::Glass),
     ];
 
     let total_queries = (TOTAL * 4) as u32;
@@ -202,121 +479,40 @@ fn main() {
         mapped_at_creation: false,
     });
 
-    for &(name, kind, surfaces) in scenarios {
-        let mut rt_solid = Runtime::new(
-            kind,
-            |&k: &usize, _: &mut Cx<usize>| build_scene(k),
-            (W as f32, H as f32),
-            Env::new(true, 1.0),
-        );
-        rt_solid.set_glass_policy(GlassPolicy::Solid);
-        rt_solid.frame(0.0);
-
-        let mut rt_glass = Runtime::new(
-            kind,
-            |&k: &usize, _: &mut Cx<usize>| build_scene(k),
-            (W as f32, H as f32),
-            Env::new(true, 1.0),
-        );
-        rt_glass.set_glass_policy(GlassPolicy::Glass);
-        rt_glass.frame(0.0);
-
-        let mut ren_solid = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-        ren_solid.set_liquid_glass(rt_solid.liquid_glass_frame());
-        ren_solid.prepare(
+    for &(name, kind, surfaces, policy) in scenarios {
+        let mut ren_solid = prep_renderer(&gpu.device, &gpu.queue, kind, GlassPolicy::Solid);
+        let mut ren_test = prep_renderer(&gpu.device, &gpu.queue, kind, policy);
+        let stats = ren_test.liquid_glass_stats();
+        let (s, t, d) = run_pair_timestamp(
             &gpu.device,
             &gpu.queue,
-            &mut rt_solid.text.atlas,
-            &rt_solid.instances,
-            (W, H),
+            &target,
+            &queries,
+            &resolve,
+            &read,
+            period_ms,
+            &mut ren_solid,
+            &mut ren_test,
         );
+        print_row(name, surfaces, stats, s, t, d);
+    }
 
-        let mut ren_glass = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-        ren_glass.set_liquid_glass(rt_glass.liquid_glass_frame());
-        ren_glass.prepare(
-            &gpu.device,
-            &gpu.queue,
-            &mut rt_glass.text.atlas,
-            &rt_glass.instances,
-            (W, H),
-        );
-        let stats = ren_glass.liquid_glass_stats();
-
-        for iter in 0..TOTAL {
-            let base_q = (iter * 4) as u32;
-            let order: [(u32, bool); 2] = if iter % 2 == 0 {
-                [(0, false), (2, true)]
-            } else {
-                [(2, true), (0, false)]
-            };
-            for (slot, is_glass) in order {
-                let ren = if is_glass {
-                    &mut ren_glass
-                } else {
-                    &mut ren_solid
-                };
-                let mut enc = gpu.device.create_command_encoder(&Default::default());
-                ren.draw_timed(
-                    &mut enc,
-                    &target.view,
-                    [0.0; 4],
-                    Some(wgpu::RenderPassTimestampWrites {
-                        query_set: &queries,
-                        beginning_of_pass_write_index: Some(base_q + slot),
-                        end_of_pass_write_index: Some(base_q + slot + 1),
-                    }),
-                );
-                ren.submit(&gpu.queue, enc);
-                gpu.device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .unwrap();
-            }
+    // Enumerate DX12 adapters to also measure an iGPU or Microsoft Basic Render Driver (WARP).
+    let adapters = pollster::block_on(gpu.instance.enumerate_adapters(wgpu::Backends::DX12));
+    for adapter in adapters {
+        let ainfo = adapter.get_info();
+        if ainfo.name == info.name && ainfo.device_type == info.device_type {
+            continue;
         }
-
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        enc.resolve_query_set(&queries, 0..total_queries, &resolve, 0);
-        enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, resolve_bytes);
-        gpu.queue.submit([enc.finish()]);
-        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .unwrap();
-
-        let (mut solid_ms, mut glass_ms, mut delta_ms) = (Vec::new(), Vec::new(), Vec::new());
+        if matches!(
+            ainfo.device_type,
+            wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
+        ) || ainfo
+            .name
+            .to_ascii_lowercase()
+            .contains("basic render driver")
         {
-            let bytes = read.slice(..).get_mapped_range().unwrap();
-            for pair in bytes.chunks_exact(32).skip(WARMUP) {
-                let s0 = u64::from_le_bytes(pair[0..8].try_into().unwrap());
-                let s1 = u64::from_le_bytes(pair[8..16].try_into().unwrap());
-                let g0 = u64::from_le_bytes(pair[16..24].try_into().unwrap());
-                let g1 = u64::from_le_bytes(pair[24..32].try_into().unwrap());
-                let sm = (s1.saturating_sub(s0)) as f64 * period_ms;
-                let gm = (g1.saturating_sub(g0)) as f64 * period_ms;
-                solid_ms.push(sm);
-                glass_ms.push(gm);
-                delta_ms.push(gm - sm);
-            }
+            bench_secondary_adapter(&adapter);
         }
-        read.unmap();
-
-        solid_ms.sort_by(f64::total_cmp);
-        glass_ms.sort_by(f64::total_cmp);
-        delta_ms.sort_by(f64::total_cmp);
-        let med = |v: &[f64]| v[v.len() / 2];
-        let p95 = |v: &[f64]| v[(v.len() * 95) / 100];
-        let max = |v: &[f64]| *v.last().unwrap();
-        let d_med = med(&delta_ms);
-        let per_surface = d_med / surfaces as f64;
-        println!(
-            "  {name:<26} surfaces={surfaces:>2} epochs={:>2} py={:.2}MB | solid={:.3}ms glass={:.3}ms | delta med={:.3}ms ({:.3}ms/surf) p95={:.3}ms max={:.3}ms",
-            stats.epochs,
-            stats.pyramid_bytes as f64 / (1024.0 * 1024.0),
-            med(&solid_ms),
-            med(&glass_ms),
-            d_med,
-            per_surface,
-            p95(&delta_ms),
-            max(&delta_ms),
-        );
     }
 }

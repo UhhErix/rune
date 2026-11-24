@@ -6,6 +6,7 @@
 //! `Kind::Rect` when capture or pipeline creation is unavailable.
 
 pub mod apple;
+pub mod budget;
 pub(crate) mod composite;
 mod plan;
 pub(crate) mod probe;
@@ -17,7 +18,7 @@ use std::sync::Mutex;
 use super::{Backdrop, dxbc, layers};
 use composite::{EpochUniform, composite_from_wgsl, composite_wgsl, make_composite_pipeline};
 pub use composite::{
-    FLAG_CURSOR_LIGHT, FLAG_HAS_TINT, FLAG_INCREASED_CONTRAST, FLAG_LARGE,
+    FLAG_BLUR_ONLY, FLAG_CURSOR_LIGHT, FLAG_HAS_TINT, FLAG_INCREASED_CONTRAST, FLAG_LARGE,
     FLAG_REDUCED_TRANSPARENCY, GlassShapeGpu, MAX_SHAPES_PER_DRAW, MODE_CLEAR, MODE_CUSTOM,
     MODE_REGULAR,
 };

@@ -84,12 +84,21 @@ impl crate::cold::Empty for FocusSpec {
     };
 }
 
+/// Full-viewport backdrop scrim painted behind a modal (`El::modal_scrim`, `El::modal_scrim_blur`).
+#[derive(Clone, Copy)]
+pub(crate) struct ModalScrim {
+    pub color: Color,
+    pub blur: f32,
+}
+
 #[derive(Clone)]
 pub(crate) struct ModalSpec {
     pub dismiss: Option<PressFn>,
     pub outside: bool,
     /// [`El::modal_live`]: the keys whose nodes (and their subtrees) stay live while it's open.
     pub live: Vec<String>,
+    /// Optional full-viewport scrim painted behind this modal and its hoisted Liquid Glass.
+    pub scrim: Option<ModalScrim>,
 }
 
 impl El {
@@ -322,6 +331,7 @@ impl El {
             outside: click_outside,
             dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))),
             live: Vec::new(),
+            scrim: None,
         });
         self
     }
@@ -332,13 +342,14 @@ impl El {
             outside: click_outside,
             dismiss: Some(Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx))),
             live: Vec::new(),
+            scrim: None,
         });
         self
     }
     /// Trap focus and make the background inert while mounted, with no Escape or outside-click
     /// dismissal (as HTML's `<dialog closedby="none">`): the modal's own controls close it.
     pub fn modal_trap(mut self) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None, live: Vec::new() });
+        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None, live: Vec::new(), scrim: None });
         self
     }
     /// Keeps the nodes with these keys, and everything inside them, live while this modal is open
@@ -360,6 +371,24 @@ impl El {
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
         if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal { m.outside = enabled; }
+        self
+    }
+    /// Paints a full-viewport backdrop scrim of `color` behind this modal (call after [`El::modal`]
+    /// or [`El::modal_tx`]). Hoists ahead of any ancestor opacity/fade layer and ahead of this
+    /// modal's [`El::liquid_glass`] so the underlying room stays visible and dimmed outside, and
+    /// blurs through a translucent glass sheet rather than turning solid black.
+    pub fn modal_scrim(mut self, color: Color) -> Self {
+        if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal {
+            m.scrim = Some(ModalScrim { color, blur: 0.0 });
+        }
+        self
+    }
+    /// Like [`El::modal_scrim`], also blurring the backdrop behind the scrim by `sigma` points
+    /// (subject to the window's `max_backdrop_blurs` cap).
+    pub fn modal_scrim_blur(mut self, color: Color, sigma: f32) -> Self {
+        if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal {
+            m.scrim = Some(ModalScrim { color, blur: sigma.max(0.0) });
+        }
         self
     }
 }

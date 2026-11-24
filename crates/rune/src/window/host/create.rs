@@ -312,6 +312,10 @@ impl Host {
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
         self.gpu = Some((gpu, renderer));
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
+        self.app.rt_mut().set_glass_adapter_info(
+            &gpu.adapter.get_info(),
+            crate::platform::preferences::on_battery(),
+        );
         rebuild_renderer_core(&gpu.device, renderer, target_format, self.app.rt_mut());
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);

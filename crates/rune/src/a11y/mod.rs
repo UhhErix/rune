@@ -188,6 +188,7 @@ impl AccessibilityLink {
             rt.set_system_contrast(crate::platform::preferences::contrast());
             rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
             rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency());
+            rt.set_glass_power_battery(crate::platform::preferences::on_battery());
             queued |= !was_dirty && rt.commit.dirty;
         }
         match inbox.asked {

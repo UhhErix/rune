@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 use super::{intersect, premul};
 use crate::color::Color;
-use crate::el::{GlassPolicy, GlassVariant, LiquidGlass};
+use crate::el::{GlassPolicy, GlassTier, GlassVariant, LiquidGlass};
 use crate::render::liquid_glass::{
-    FLAG_CURSOR_LIGHT, FLAG_HAS_TINT, FLAG_INCREASED_CONTRAST, FLAG_LARGE,
+    FLAG_BLUR_ONLY, FLAG_CURSOR_LIGHT, FLAG_HAS_TINT, FLAG_INCREASED_CONTRAST, FLAG_LARGE,
     FLAG_REDUCED_TRANSPARENCY, GlassProbeRequest, GlassShapeGpu, LiquidGlassFrame,
     MAX_SHAPES_PER_DRAW, MODE_CLEAR, MODE_CUSTOM, MODE_REGULAR, apple,
 };
@@ -71,10 +71,7 @@ pub(in crate::runtime) struct GlassPaintState {
 
 impl GlassPaintState {
     pub(in crate::runtime) fn new() -> Self {
-        Self {
-            frame: LiquidGlassFrame::new(),
-            ..Self::default()
-        }
+        Self { frame: LiquidGlassFrame::new(), ..Self::default() }
     }
 
     pub(in crate::runtime) fn begin_frame(&mut self, pointer_px: [f32; 4]) {
@@ -118,29 +115,32 @@ impl GlassPaintState {
         while let Some(top) = self.containers.last() {
             let ancestor = top.node_index;
             let mut parent = node_parent;
-            while let Some(p) = parent
-                && p != ancestor
-            {
+            while let Some(p) = parent && p != ancestor {
                 parent = nodes[p].parent;
             }
-            if parent == Some(ancestor) {
-                break;
-            }
-            if let Some(c) = self.containers.pop() {
-                self.finish_container(c, instances);
-            }
+            if parent == Some(ancestor) { break; }
+            if let Some(c) = self.containers.pop() { self.finish_container(c, instances); }
         }
     }
 
     pub(in crate::runtime) fn close_all_containers(&mut self, instances: &mut [Instance]) {
-        while let Some(c) = self.containers.pop() {
-            self.finish_container(c, instances);
+        while let Some(c) = self.containers.pop() { self.finish_container(c, instances); }
+    }
+
+    pub(in crate::runtime) fn push_splice(&mut self, insert_before: usize, instances: Vec<Instance>) {
+        if !instances.is_empty() {
+            self.pending_splices.push(GlassSplice { insert_before, instances });
         }
     }
 
-    fn finish_container(&mut self, c: OpenContainer, instances: &mut [Instance]) {
+    fn finish_container(&mut self, mut c: OpenContainer, instances: &mut [Instance]) {
         if c.shapes.is_empty() {
             return;
+        }
+        // Group shapes with matching `glass_union` ids adjacently so `eval_sdf` merges each union
+        // group seamlessly in a single pass regardless of child order.
+        if c.shapes.len() > 1 && !c.union_ids.is_empty() {
+            c.shapes.sort_by_key(|s| s.light[2] as u32);
         }
         let spacing_px = c.spacing_pt * c.k_px;
         let mut chunk_records: Vec<Instance> = Vec::new();
@@ -303,52 +303,50 @@ fn to_srgb_straight(c: Color) -> [f32; 4] {
 /// uber `Rect` (+ contrast rim under a system contrast theme).
 #[derive(Clone, Copy)]
 enum GlassResolution {
-    /// Render live glass, optionally with §0 accessibility parameter overrides.
-    Live {
-        reduced_transparency: bool,
-        increased_contrast: bool,
-    },
-    /// Render solid fallback fill + optional rim colour (zero GPU glass pass).
+    Live { reduced_transparency: bool, increased_contrast: bool, blur_only: bool },
     Solid { fill: Color, rim: Option<Color> },
 }
 
 fn resolve_glass(
     glass: &LiquidGlass,
     policy: GlassPolicy,
+    budget_tier: GlassTier,
     sys_reduced_transparency: bool,
     sys_increased_contrast: bool,
     sys_contrast: Option<crate::SystemContrast>,
 ) -> GlassResolution {
     if let Some(contrast) = sys_contrast {
-        return GlassResolution::Solid {
-            fill: contrast.window,
-            rim: Some(contrast.text),
-        };
+        return GlassResolution::Solid { fill: contrast.window, rim: Some(contrast.text) };
     }
     match policy {
-        GlassPolicy::Solid => GlassResolution::Solid {
-            fill: glass.still,
-            rim: None,
+        GlassPolicy::Solid => GlassResolution::Solid { fill: glass.still, rim: None },
+        GlassPolicy::BlurOnly => GlassResolution::Live {
+            reduced_transparency: sys_reduced_transparency,
+            increased_contrast: sys_increased_contrast,
+            blur_only: true,
         },
-        GlassPolicy::Glass => GlassResolution::Live {
-            reduced_transparency: false,
-            increased_contrast: false,
+        GlassPolicy::Glass => match budget_tier {
+            GlassTier::Solid => GlassResolution::Solid { fill: glass.still, rim: None },
+            GlassTier::BlurOnly => GlassResolution::Live {
+                reduced_transparency: false, increased_contrast: false, blur_only: true,
+            },
+            GlassTier::Full => GlassResolution::Live {
+                reduced_transparency: false, increased_contrast: false, blur_only: false,
+            },
         },
-        GlassPolicy::FollowSystem => {
-            let rt = sys_reduced_transparency;
-            let ic = sys_increased_contrast;
-            if glass.variant == GlassVariant::Custom && (rt || ic) {
-                GlassResolution::Solid {
-                    fill: glass.still,
-                    rim: None,
-                }
-            } else {
-                GlassResolution::Live {
-                    reduced_transparency: rt,
-                    increased_contrast: ic,
-                }
-            }
-        }
+        GlassPolicy::FollowSystem | GlassPolicy::Auto => match budget_tier {
+            GlassTier::Solid => GlassResolution::Solid { fill: glass.still, rim: None },
+            GlassTier::BlurOnly => GlassResolution::Live {
+                reduced_transparency: sys_reduced_transparency,
+                increased_contrast: sys_increased_contrast,
+                blur_only: true,
+            },
+            GlassTier::Full => GlassResolution::Live {
+                reduced_transparency: sys_reduced_transparency,
+                increased_contrast: sys_increased_contrast,
+                blur_only: false,
+            },
+        },
     }
 }
 
@@ -383,35 +381,23 @@ impl RuntimeCore {
         }
 
         let node_id = n.id;
-        let glass_id = n
-            .vis
-            .liquid_glass
-            .as_deref()
-            .and_then(|gn| gn.glass_id.clone());
-        let glass_union = n
-            .vis
-            .liquid_glass
-            .as_deref()
-            .and_then(|gn| gn.glass_union.clone());
+        let glass_id = n.vis.liquid_glass.as_deref().and_then(|gn| gn.glass_id.clone());
+        let glass_union = n.vis.liquid_glass.as_deref().and_then(|gn| gn.glass_union.clone());
         let is_apple_capsule_default =
             matches!(glass.variant, GlassVariant::Regular | GlassVariant::Clear)
                 && radii == [0.0; 4]
                 && !continuous;
         let effective_radii = if is_apple_capsule_default {
-            let cap = rect[2].min(rect[3]) * 0.5;
-            [cap; 4]
+            [rect[2].min(rect[3]) * 0.5; 4]
         } else {
             radii
         };
-        let signed_radii = if continuous {
-            effective_radii.map(|v| -v)
-        } else {
-            effective_radii
-        };
+        let signed_radii = if continuous { effective_radii.map(|v| -v) } else { effective_radii };
 
         let resolution = resolve_glass(
             &glass,
             self.host.glass_policy,
+            self.host.glass_budget.tier(),
             self.host.system_reduced_transparency,
             self.host.system_increased_contrast,
             self.host.system_contrast,
@@ -454,11 +440,7 @@ impl RuntimeCore {
             return Some(if continuous { -hole } else { hole });
         }
 
-        let GlassResolution::Live {
-            reduced_transparency,
-            increased_contrast,
-        } = resolution
-        else {
+        let GlassResolution::Live { reduced_transparency, increased_contrast, blur_only } = resolution else {
             unreachable!();
         };
 
@@ -483,11 +465,7 @@ impl RuntimeCore {
             );
         }
         self.paint.glass.curr_ids.insert(node_id, true);
-        let materialize = self
-            .scene
-            .get(node_id, P_GLASS_MATERIALIZE)
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0);
+        let materialize = self.scene.get(node_id, P_GLASS_MATERIALIZE).unwrap_or(1.0).clamp(0.0, 1.0);
 
         // Interactive physics: press spring, hover swell springs, gel stretch, drag follow, touch glow.
         let mut shape_rect = rect;
@@ -497,20 +475,15 @@ impl RuntimeCore {
             let press_t = self.scene.get(node_id, P_GLASS_PRESS).unwrap_or(0.0);
             let hover_x = self.scene.get(node_id, P_GLASS_HOVER_X).unwrap_or(1.0);
             let hover_y = self.scene.get(node_id, P_GLASS_HOVER_Y).unwrap_or(1.0);
-            hover_amt = self
-                .scene
-                .get(node_id, P_HOVER)
-                .unwrap_or(0.0)
-                .clamp(0.0, 1.0);
-            let glow_t = self
-                .scene
-                .get(node_id, P_GLASS_GLOW)
-                .unwrap_or(0.0)
-                .clamp(0.0, 1.0);
+            hover_amt = self.scene.get(node_id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
+            let glow_t = self.scene.get(node_id, P_GLASS_GLOW).unwrap_or(0.0).clamp(0.0, 1.0);
 
-            let base_press_scale = 1.0 + (apple::PRESS_SCALE - 1.0) * press_t;
-            let mut sx = base_press_scale * hover_x;
-            let mut sy = base_press_scale * hover_y;
+            let (mut sx, mut sy) = if self.reduced_motion {
+                (1.0, 1.0)
+            } else {
+                let base_press_scale = 1.0 + (apple::PRESS_SCALE - 1.0) * press_t;
+                (base_press_scale * hover_x, base_press_scale * hover_y)
+            };
             let mut follow_x = 0.0f32;
             let mut follow_y = 0.0f32;
 
@@ -520,9 +493,9 @@ impl RuntimeCore {
             if let Some((px_pt, py_pt)) = self.pointer.pos {
                 let px = px_pt * s;
                 let py = py_pt * s;
-                if press_t > 0.005 {
+                if press_t > 0.005 || glow_t > 0.005 {
                     self.paint.glass.touch_points.insert(node_id, [px, py]);
-                    if !self.reduced_motion {
+                    if !self.reduced_motion && press_t > 0.005 {
                         let dx = px - cx;
                         let dy = py - cy;
                         let pt_c = press_t.clamp(0.0, 1.0);
@@ -579,13 +552,14 @@ impl RuntimeCore {
 
         let bevel_pt = apple::bevel_pt(w_pt, h_pt, glass.bevel);
         let bevel_px = bevel_pt * k_px;
-        let refract_scale = if reduced_transparency {
-            glass.refraction * 0.35
-        } else {
-            glass.refraction
-        };
+        let refract_scale = if reduced_transparency || blur_only { 0.0 } else { glass.refraction };
         let max_refract_px =
             apple::refraction_max_pt(w_pt, h_pt, glass.bevel, refract_scale) * k_px;
+        let dispersion = if self.reduced_motion || reduced_transparency || blur_only {
+            0.0
+        } else {
+            glass.dispersion
+        };
 
         let (shadow_blur_px, shadow_y_px) = match glass.variant {
             GlassVariant::Regular | GlassVariant::Clear => (
@@ -613,9 +587,8 @@ impl RuntimeCore {
         if increased_contrast {
             mode_flags |= FLAG_INCREASED_CONTRAST;
         }
-        if glass.has_tint {
-            mode_flags |= FLAG_HAS_TINT;
-        }
+        if glass.has_tint { mode_flags |= FLAG_HAS_TINT; }
+        if blur_only { mode_flags |= FLAG_BLUR_ONLY; }
 
         // Tint encoding: Apple maps straight tint RGB to luminance at TINT_ALPHA (or tint.a if set);
         // Custom uses premultiplied tint overlay matching CSS background-color.
@@ -716,7 +689,7 @@ impl RuntimeCore {
                 glass.sheen[0],
             ],
             inner_c,
-            bend: [bevel_px, max_refract_px, glass.dispersion, glass.sheen[1]],
+            bend: [bevel_px, max_refract_px, dispersion, glass.sheen[1]],
             light: [light_angle, mode_flags as f32, union_id_f, 1.0],
             glow: glow_vec,
             extra: [shadow_blur_px, shadow_y_px, hover_amt, materialize],
