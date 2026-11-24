@@ -495,3 +495,59 @@ fn gpu_and_cpu_boot_saturate_images_in_shader() {
     assert_eq!(list[0].fill, [0.5, 0.5, 0.5, 0.5]);
     assert_eq!(list[0].border[0], -0.55);
 }
+
+#[test]
+fn rest_frees_image_atlas_cpu_backing_while_gpu_texture_renders_identically() {
+    use crate::el::{El, el};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::runtime::{Cx, Env, Runtime};
+
+    fn view(px: &Pixels, _: &mut Cx<Pixels>) -> El { el().size(8.0, 8.0).pixels(px) }
+    let px = Pixels::new();
+    px.set(8, 8, [32, 180, 220, 255].repeat(64));
+    let mut rt = Runtime::new(px, view, (8.0, 8.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    assert!(rt.images.pages[0].gpu_resident);
+    assert!(!rt.images.pages[0].data.is_empty());
+
+    // Rest releases CPU RGBA backing while keeping the uploaded GPU texture alive.
+    rt.images.rest();
+    assert!(rt.images.pages[0].data.is_empty(), "CPU backing freed at rest");
+
+    // Next frame draws identically without re-uploading or recreating the GPU texture.
+    rt.frame(1.0);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    assert!(renderer.has_images());
+    assert!(rt.images.pages[0].data.is_empty());
+
+    let target = Offscreen::new(&gpu.device, 8, 8);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    for (got, want) in out[..4].iter().zip([32u8, 180, 220, 255]) {
+        assert!(got.abs_diff(want) <= 1, "post-rest pixel {got} != {want}");
+    }
+
+    // After GPU release + invalidate, the next frame re-copies from Pixels and renders identically.
+    renderer.clear_images();
+    rt.images.invalidate();
+    rt.frame(2.0);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    for (got, want) in out[..4].iter().zip([32u8, 180, 220, 255]) {
+        assert!(got.abs_diff(want) <= 1, "post-invalidate pixel {got} != {want}");
+    }
+}

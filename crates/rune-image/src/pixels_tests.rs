@@ -495,3 +495,47 @@ fn pixels_place_lock_hold_time_1080x2400() {
         steady_total[10], steady_lock[10], unchanged_lock[10]
     );
 }
+
+#[test]
+fn rest_releases_cpu_backing_for_gpu_resident_pages_and_migrates_updates() {
+    let mut atlas = ImageAtlas::default();
+    let static_px = Pixels::new();
+    static_px.set(16, 16, [10, 20, 30, 255].repeat(256));
+    let stream_px = Pixels::new();
+    stream_px.set(16, 16, [40, 50, 60, 255].repeat(256));
+
+    let s1 = atlas.place(&static_px, [16.0, 16.0]).unwrap();
+    let d1 = atlas.place(&stream_px, [16.0, 16.0]).unwrap();
+    assert_eq!(s1.page, 0);
+    assert_eq!(d1.page, 0);
+    atlas.end_frame();
+
+    // Simulate GPU upload clearing dirty rows and marking page GPU-resident.
+    atlas.pages[0].dirty = None;
+    atlas.pages[0].gpu_resident = true;
+
+    atlas.rest();
+    assert_eq!(atlas.pages.len(), 1);
+    assert!(atlas.pages[0].data.is_empty(), "rest drops CPU mirror of clean GPU-resident page");
+    assert!(atlas.pages[0].gpu_resident);
+    assert!(atlas.has_slot(&static_px, 0));
+
+    // Unchanged image stays on the GPU-resident page without reallocating CPU backing.
+    let s2 = atlas.place(&static_px, [16.0, 16.0]).unwrap();
+    assert_eq!(s2, s1);
+    assert!(atlas.pages[0].data.is_empty());
+
+    // Updated streaming image migrates off the sealed page onto a fresh page.
+    stream_px.set(16, 16, [90, 100, 110, 255].repeat(256));
+    let d2 = atlas.place(&stream_px, [16.0, 16.0]).unwrap();
+    assert_ne!(d2.page, 0, "updated image allocates on an unsealed page");
+    assert!(!atlas.pages[d2.page].data.is_empty());
+    assert!(atlas.pages[d2.page].dirty.is_some());
+
+    // Invalidate drops slots whose CPU backing was released so the next frame copies them back.
+    atlas.invalidate();
+    assert!(!atlas.has_slot(&static_px, 0));
+    assert!(atlas.has_slot(&stream_px, 0));
+    let s3 = atlas.place(&static_px, [16.0, 16.0]).unwrap();
+    assert!(!atlas.pages[s3.page].data.is_empty());
+}
