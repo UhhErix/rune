@@ -4234,6 +4234,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-ui"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "rune",
+ "rune-fx",
+ "rune-kit",
+ "rune-motion",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "rune-www"
 version = "0.0.1"
 dependencies = [
@@ -5102,6 +5115,15 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui-gallery"
+version = "0.1.0"
+dependencies = [
+ "rune",
+ "rune-kit",
+ "rune-ui",
 ]
 
 [[package]]

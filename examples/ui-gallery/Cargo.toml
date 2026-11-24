@@ -1,0 +1,13 @@
+[package]
+name = "ui-gallery"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+rune = { workspace = true, default-features = true }
+rune-kit = { workspace = true }
+rune-ui = { workspace = true }
+
+[lints]
+workspace = true
