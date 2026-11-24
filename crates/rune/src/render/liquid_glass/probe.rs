@@ -16,7 +16,7 @@ const RING_LEN: usize = 3;
 /// Maximum simultaneous probed `glass_id` shapes per frame.
 pub(super) const MAX_PROBES: u32 = 64;
 /// Bytes per row for `Rgba16Float` copy (aligned to WebGPU `COPY_BYTES_PER_ROW_ALIGNMENT = 256`).
-const ROW_BYTES: u32 = ((MAX_PROBES * 8 + 255) / 256) * 256;
+const ROW_BYTES: u32 = (MAX_PROBES * 8).div_ceil(256) * 256;
 
 /// GPU storage entry matching `ProbeCoord` in `liquid_glass_down.wgsl`.
 #[repr(C)]
@@ -309,7 +309,7 @@ impl ProbeRing {
             }
         }
         // Strictly non-blocking poll (`PollType::Poll`).
-        let _ = device.poll(wgpu::PollType::Poll);
+        drop(device.poll(wgpu::PollType::Poll));
 
         let mut out = Vec::new();
         for slot in &mut self.slots {

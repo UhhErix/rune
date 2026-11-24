@@ -428,10 +428,10 @@ impl El {
     /// Children, fills, borders and shadows draw on top.
     pub fn liquid_glass(mut self, glass: LiquidGlass) -> Self {
         if glass.is_identity() {
-            if let Some(cold) = self.vis.cold.get_mut_if_some() {
-                if let Some(gn) = cold.liquid_glass.as_deref_mut() {
-                    gn.glass = Some(glass);
-                }
+            if let Some(cold) = self.vis.cold.get_mut_if_some()
+                && let Some(gn) = cold.liquid_glass.as_deref_mut()
+            {
+                gn.glass = Some(glass);
             }
             return self;
         }
