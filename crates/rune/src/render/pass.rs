@@ -36,6 +36,8 @@ pub(super) struct OpenPass<'a, 'p> {
     scissor: Option<[u32; 4]>,
     /// The frame pass's timestamp writes: a re-opened pass writes the end index again.
     timestamps: Option<wgpu::RenderPassTimestampWrites<'a>>,
+    /// Clear colour bits when the pass opened with `LoadOp::Clear`; `None` for `LoadOp::Load`.
+    clear: Option<[u64; 4]>,
 }
 
 impl<'a, 'p> ActivePass<'a, 'p> {
@@ -62,7 +64,31 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         view: &'a wgpu::TextureView,
         timestamps: Option<wgpu::RenderPassTimestampWrites<'a>>,
     ) -> Self {
-        ActivePass::Owned(OpenPass { pass, encoder, view, scissor: None, timestamps })
+        ActivePass::Owned(OpenPass { pass, encoder, view, scissor: None, timestamps, clear: None })
+    }
+
+    pub(super) fn with_clear(mut self, load: wgpu::LoadOp<wgpu::Color>) -> Self {
+        if let ActivePass::Owned(owned) = &mut self {
+            owned.clear = match load {
+                wgpu::LoadOp::Clear(c) => Some([c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]),
+                wgpu::LoadOp::Load | wgpu::LoadOp::DontCare(_) => None,
+            };
+        }
+        self
+    }
+
+    pub(super) fn clear_bits(&self) -> Option<[u64; 4]> {
+        match self {
+            ActivePass::Owned(owned) => owned.clear,
+            ActivePass::Borrowed { .. } | ActivePass::Parked => None,
+        }
+    }
+
+    pub(super) fn bound(&self) -> Option<[u32; 4]> {
+        match self {
+            ActivePass::Borrowed { bound, .. } => *bound,
+            ActivePass::Owned(_) | ActivePass::Parked => None,
+        }
     }
 
     /// Sets the scissor to `rect` (`[x, y, width, height]`), or to the whole `size` target.
@@ -163,7 +189,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
     ) -> Option<&'r Backdrop> {
         if !self.splittable() { return None; }
         let bd = renderer.backdrops.iter().find(|b| b.format == format)?;
-        let OpenPass { pass, encoder, view, scissor, timestamps } = self.take()?;
+        let OpenPass { pass, encoder, view, scissor, timestamps, clear } = self.take()?;
         // The pass ends here: the encoder is free until it re-opens below.
         drop(pass);
         let (vw, vh) = (bd.texture.width(), bd.texture.height());
@@ -241,7 +267,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         }).forget_lifetime();
         next.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
         if let Some([x, y, w, h]) = scissor { next.set_scissor_rect(x, y, w, h); }
-        *self = ActivePass::Owned(OpenPass { pass: next, encoder, view, scissor, timestamps });
+        *self = ActivePass::Owned(OpenPass { pass: next, encoder, view, scissor, timestamps, clear });
         Some(bd)
     }
 }

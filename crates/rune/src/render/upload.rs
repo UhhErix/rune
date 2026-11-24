@@ -40,6 +40,13 @@ pub(super) struct Uploads {
     held_paint: Option<u64>,
     /// The last `prepare` wrote only a loop-only frame's slots.
     patched: bool,
+    /// Lowest instance index that differed from the previous `prepare` (`usize::MAX` if none).
+    pub(super) first_changed: usize,
+    /// Union of old and new `layer_bounds()` of changed instances when all changes are plain
+    /// (non-layer) instances; `None` means unknown/all dirty.
+    pub(super) changed_bounds: Option<[f32; 4]>,
+    /// Last `(atlas.resets(), atlas.rasterized())` seen in `prepare`.
+    atlas_state: (u64, u64),
     #[cfg(test)]
     pub(super) globals_writes: u64,
     #[cfg(test)]
@@ -49,6 +56,7 @@ pub(super) struct Uploads {
 impl Default for Uploads {
     fn default() -> Uploads {
         Uploads { staging: None, frame_writes: None, instances: Vec::new(), batched: false, has_layers: false, viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0), next: None, held_paint: None, patched: false,
+            first_changed: 0, changed_bounds: None, atlas_state: (u64::MAX, u64::MAX),
             #[cfg(test)] globals_writes: 0, #[cfg(test)] batch_runs: 0 }
     }
 }
@@ -59,6 +67,8 @@ impl Uploads {
         self.instances.clear();
         self.batched = false;
         self.held_paint = None;
+        self.first_changed = 0;
+        self.changed_bounds = None;
     }
 
     pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Staging {
@@ -156,17 +166,33 @@ impl Renderer {
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.1 {
             self.uploads.lost.1 = staging.lost();
-            for page in &mut images.pages { page.dirty = Some((0, page.height)); }
+            for page in &mut images.pages {
+                if !page.data.is_empty() {
+                    page.dirty = Some((0, page.height));
+                }
+            }
         }
         let mut changed = self.images.len() != images.pages.len();
+        let mut uploaded = false;
         self.images.resize_with(images.pages.len(), || None);
         for (index, page) in images.pages.iter_mut().enumerate() {
             // A page past the device's largest texture (placed before this renderer said its limit)
             // draws nothing rather than failing validation.
-            if page.data.is_empty() || page.width.max(page.height) > self.max_texture_dim {
+            if page.width.max(page.height) > self.max_texture_dim
+                || (page.data.is_empty() && !page.gpu_resident)
+            {
                 changed |= self.images[index].is_some(); self.images[index] = None; continue;
             }
-            if self.images[index].as_ref().is_none_or(|(t, _)| t.width() != page.width || t.height() != page.height) {
+            let matches = self.images[index]
+                .as_ref()
+                .is_some_and(|(t, _)| t.width() == page.width && t.height() == page.height);
+            if !matches {
+                if page.data.is_empty() {
+                    changed |= self.images[index].is_some();
+                    self.images[index] = None;
+                    page.gpu_resident = false;
+                    continue;
+                }
                 let texture = Self::image_texture(device, page.width, page.height);
                 let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &texture, None);
                 self.images[index] = Some((texture, bind));
@@ -174,9 +200,15 @@ impl Renderer {
                 page.dirty = Some((0, page.height));
             }
             let Some(rows) = page.dirty.take() else { continue };
+            if page.data.is_empty() { continue; }
             Self::write_rows(&staging, &self.images[index].as_ref().unwrap().0, &page.data, rows);
+            page.gpu_resident = true;
+            uploaded = true;
         }
         if changed { self.images_changed(); }
+        if changed || uploaded {
+            if let Some(lg) = &mut self.liquid_glass { lg.invalidate_cache(); }
+        }
         self.refresh_layer_bindings(device);
     }
 
@@ -190,6 +222,7 @@ impl Renderer {
         self.images.clear();
         self.layers.clear_images();
         self.images_changed();
+        if let Some(lg) = &mut self.liquid_glass { lg.invalidate_cache(); }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
         had
@@ -262,9 +295,11 @@ impl Renderer {
         #[cfg(feature = "frame-profile")]
         super::report_pinned();
         let staging = self.uploads.staging(device, queue);
+        let mut backdrop_deps_changed = false;
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
             self.resend_uploads(atlas);
+            backdrop_deps_changed = true;
         }
         // The Windfoil shader, built the first time text draws from outlines (render/variant.rs),
         // fills atlas pages on the GPU, so the pages are made again as ones it can draw into.
@@ -273,6 +308,7 @@ impl Renderer {
             for page in &mut self.atlas_pages { page.0 = Self::atlas_texture(device, true, ATLAS_SIZE); }
             self.rebind_all(device);
             atlas.invalidate();
+            backdrop_deps_changed = true;
         }
         // The first page's texture grows with what its shelves hold (or explicit dirty rows); a
         // new one starts empty, so every placed row goes up again and every GPU-filled mask is
@@ -287,12 +323,16 @@ impl Renderer {
             if let Some((a, b)) = dirty_rows {
                 atlas.dirty = Some(atlas.dirty.map_or((a, b), |(c, d)| (a.min(c), b.max(d))));
             }
+            backdrop_deps_changed = true;
         }
         atlas.outlines.set_support(self.uber.support());
+        let prev_lcd = self.lcd_frame;
         self.lcd_frame = self.lcd_ready(device, atlas.lcd_wanted) && atlas.lcd;
+        backdrop_deps_changed |= self.lcd_frame != prev_lcd;
         if let Some(rows) = atlas.dirty.take() {
             atlas.rows_uploaded(0, rows);
             Self::write_rows(&staging, &self.atlas, &atlas.data, rows);
+            backdrop_deps_changed = true;
         }
         let mut atlas_changed = self.atlas_pages.len() > atlas.pages.len();
         self.atlas_pages.truncate(atlas.pages.len());
@@ -307,24 +347,39 @@ impl Renderer {
             if let Some(rows) = atlas.pages[index].dirty.take() {
                 atlas.rows_uploaded(index + 1, rows);
                 Self::write_rows(&staging, &self.atlas_pages[index].0, &atlas.pages[index].data, rows);
+                backdrop_deps_changed = true;
             }
         }
-        if atlas_changed { self.images_changed(); }
+        if atlas_changed {
+            self.images_changed();
+            backdrop_deps_changed = true;
+        }
+        let cur_atlas_state = (atlas.resets(), atlas.rasterized());
+        if cur_atlas_state != self.uploads.atlas_state {
+            self.uploads.atlas_state = cur_atlas_state;
+            backdrop_deps_changed = true;
+        }
         self.upload_outlines(device, &staging, atlas);
         self.fill_atlas(device, queue, &staging, atlas);
+        if self.fills.lock().unwrap().is_some() {
+            backdrop_deps_changed = true;
+        }
         if self.instances.ensure(device, instances.len()) {
             self.uploads.forget_instances();
+            backdrop_deps_changed = true;
         }
         self.write_instances(&staging, instances);
         // Geometry uploads must preserve a presentation timestamp already latched this frame.
         if self.uploads.viewport.swap(pack(viewport), Ordering::Relaxed) != pack(viewport) {
             staging.write_buffer(&self.globals, std::mem::offset_of!(Globals, viewport) as u64, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32]));
+            backdrop_deps_changed = true;
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
         let mode = (self.srgb_blend, byte_source, [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()]);
         if self.uploads.srgb.replace(mode) != Some(mode) {
             let flags: [f32; 4] = [self.srgb_blend as u8 as f32, byte_source as u8 as f32, self.fade_stops[0], self.fade_stops[1]];
             staging.write_buffer(&self.globals, std::mem::offset_of!(Globals, flags) as u64, bytemuck::cast_slice(&flags));
+            backdrop_deps_changed = true;
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
         self.count = instances.len() as u32;
@@ -346,14 +401,28 @@ impl Renderer {
         if self.backdrop_used {
             self.ensure_backdrop(device, self.format, viewport);
             for index in 0..self.extra.len() {
-                self.ensure_backdrop(device, self.extra[index].0, viewport);
+                let extra_fmt = self.extra[index].0;
+                if extra_fmt != layers::FORMAT {
+                    self.ensure_backdrop(device, extra_fmt, viewport);
+                }
             }
-            if self.layers.targets.iter().any(Option::is_some) {
+            let layer_needs_backdrop = self.effects.iter().any(|&(at, i)| {
+                (i.params[0] != 0.0 || matches!(i.kind(), Some(Kind::BackdropBlur | Kind::LiquidGlass)))
+                    && self.layers.has_active_target_containing(at)
+            });
+            if layer_needs_backdrop {
                 self.ensure_backdrop(device, layers::FORMAT, viewport);
+            } else if layers::FORMAT != self.format {
+                let had = self.backdrops.len();
+                self.backdrops.retain(|b| b.format != layers::FORMAT);
+                if self.backdrops.len() != had {
+                    if let Some(blur) = &mut self.backdrop_blur { blur.unbind_backdrop(layers::FORMAT); }
+                    if let Some(lg) = &mut self.liquid_glass { lg.unbind_backdrop(layers::FORMAT); }
+                }
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);
-        self.prepare_liquid_glass(device, queue, instances, viewport);
+        self.prepare_liquid_glass(device, queue, instances, viewport, !backdrop_deps_changed);
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
@@ -496,8 +565,33 @@ impl Renderer {
         }
         self.uploads.held_paint = next.map(|n| n.0);
         let held = &mut self.uploads.instances;
-        let shared = instances.len().min(held.len());
-        let mut rebatch = instances.len() != held.len();
+        let had_prev = !held.is_empty();
+        let old_len = held.len();
+        let shared = instances.len().min(old_len);
+        let mut first_changed = usize::MAX;
+        let mut bounds_valid = had_prev;
+        let mut bounds: Option<[f32; 4]> = None;
+        let note_inst = |inst: &Instance, valid: &mut bool, b: &mut Option<[f32; 4]>| {
+            if !*valid { return; }
+            if matches!(inst.kind(), Some(Kind::Layer | Kind::LayerEnd)) {
+                *valid = false;
+                return;
+            }
+            let r = inst.layer_bounds();
+            if r[2] > r[0] && r[3] > r[1] {
+                *b = Some(match *b {
+                    Some(cur) => [cur[0].min(r[0]), cur[1].min(r[1]), cur[2].max(r[2]), cur[3].max(r[3])],
+                    None => r,
+                });
+            }
+        };
+        if instances.len() < old_len {
+            first_changed = first_changed.min(instances.len());
+            for inst in &held[instances.len()..old_len] {
+                note_inst(inst, &mut bounds_valid, &mut bounds);
+            }
+        }
+        let mut rebatch = instances.len() != old_len;
         held.resize(instances.len(), Instance::zeroed());
         let mut open: Option<std::ops::Range<usize>> = None;
         for start in (0..shared).step_by(BLOCK) {
@@ -508,11 +602,34 @@ impl Renderer {
                 (start + 1..end).find(differs).unwrap_or(start)
             };
             let last = (first..end).rfind(differs).map_or(end, |i| i + 1);
+            first_changed = first_changed.min(first);
+            if bounds_valid {
+                for i in first..last {
+                    if !same(&instances[i..=i], &held[i..=i]) {
+                        note_inst(&held[i], &mut bounds_valid, &mut bounds);
+                        note_inst(&instances[i], &mut bounds_valid, &mut bounds);
+                    }
+                }
+            }
             rebatch |= Self::join(self.instances.buffer(), held, staging, instances, &mut open, first..last);
         }
-        if instances.len() > shared { rebatch |= Self::join(self.instances.buffer(), held, staging, instances, &mut open, shared..instances.len()); }
+        if instances.len() > shared {
+            first_changed = first_changed.min(shared);
+            if bounds_valid {
+                for inst in &instances[shared..] {
+                    note_inst(inst, &mut bounds_valid, &mut bounds);
+                }
+            }
+            rebatch |= Self::join(self.instances.buffer(), held, staging, instances, &mut open, shared..instances.len());
+        }
         if let Some(span) = open { rebatch |= Self::write_span(self.instances.buffer(), held, staging, instances, span); }
         self.uploads.batched &= !rebatch;
+        self.uploads.first_changed = if had_prev { first_changed } else { 0 };
+        self.uploads.changed_bounds = if bounds_valid {
+            Some(bounds.unwrap_or([0.0; 4]))
+        } else {
+            None
+        };
     }
 
     /// Writes only `patched` (ascending): the instances a loop-only frame changed (a dot's colour,
@@ -524,6 +641,9 @@ impl Renderer {
         debug_assert!(held.iter().zip(instances).enumerate().all(|(n, (h, i))| patched.binary_search(&(n as u32)).is_ok() || same(std::slice::from_ref(h), std::slice::from_ref(i))),
             "a loop-only frame changed an instance that isn't one of its slots");
         let mut rebatch = false;
+        let mut first_changed = usize::MAX;
+        let mut bounds_valid = true;
+        let mut bounds: Option<[f32; 4]> = None;
         let mut k = 0;
         while k < patched.len() {
             let start = patched[k] as usize;
@@ -531,12 +651,38 @@ impl Renderer {
             while k + 1 < patched.len() && patched[k + 1] as usize == end { k += 1; end += 1; }
             k += 1;
             if end > instances.len() || same(&instances[start..end], &held[start..end]) { continue; }
+            first_changed = first_changed.min(start);
+            if bounds_valid {
+                for i in start..end {
+                    if !same(&instances[i..=i], &held[i..=i]) {
+                        for inst in [&held[i], &instances[i]] {
+                            if matches!(inst.kind(), Some(Kind::Layer | Kind::LayerEnd)) {
+                                bounds_valid = false;
+                                break;
+                            }
+                            let r = inst.layer_bounds();
+                            if r[2] > r[0] && r[3] > r[1] {
+                                bounds = Some(match bounds {
+                                    Some(cur) => [cur[0].min(r[0]), cur[1].min(r[1]), cur[2].max(r[2]), cur[3].max(r[3])],
+                                    None => r,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             rebatch |= held[start..end].iter().zip(&instances[start..end]).any(|(h, i)| h.params[..3] != i.params[..3]);
             held[start..end].copy_from_slice(&instances[start..end]);
             let offset = (start * std::mem::size_of::<Instance>()) as u64;
             staging.write_buffer(self.instances.buffer(), offset, bytemuck::cast_slice(&instances[start..end]));
         }
         self.uploads.batched &= !rebatch;
+        self.uploads.first_changed = first_changed;
+        self.uploads.changed_bounds = if bounds_valid {
+            Some(bounds.unwrap_or([0.0; 4]))
+        } else {
+            None
+        };
     }
 
     /// The instances the buffer holds, when they are paint `paint`'s and `len` of them.

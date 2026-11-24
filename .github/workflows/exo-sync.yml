@@ -2,7 +2,7 @@ name: Exo upstream sync
 
 on:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 9 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +12,7 @@ concurrency:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 jobs:
   sync:
@@ -30,7 +31,7 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      - name: Rebase onto upstream/dev, test, and push
+      - name: Merge upstream/dev, test, and open PR
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -53,8 +54,8 @@ jobs:
             }
             $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             $body = @(
-              "Automated sync of ``exo`` onto ``anomalyco/rune@dev`` (``$UpstreamSha``) failed during **$Stage**."
-              "Nothing was pushed to ``origin/exo``."
+              "Automated merge sync of ``upstream/dev`` (``$UpstreamSha``) into ``exo`` failed during **$Stage**."
+              "``origin/exo`` was not modified."
               ""
               "Run: $runUrl"
               ""
@@ -86,40 +87,54 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $origExo = (git rev-parse origin/exo).Trim()
+          $origShort = (git rev-parse --short origin/exo).Trim()
 
           git fetch upstream dev 2>&1 | Tee-Object -FilePath $logFile -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $upstreamFull = (git rev-parse upstream/dev).Trim()
           $upstreamShort = (git rev-parse --short upstream/dev).Trim()
-          Write-Host "Syncing exo ($origExo) onto upstream/dev ($upstreamShort)"
 
-          # `--empty=drop` (together with git rebase's default patch-id skipping) drops any
-          # fork commit whose feature has already landed in upstream/dev.
-          # Generated DX12 bytecode and its hashes conflict whenever upstream and a fork commit both
-          # touch the shaders: take upstream's copy while rebasing, then regenerate once at the end.
+          git merge-base --is-ancestor $upstreamFull $origExo
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "origin/exo ($origShort) already contains upstream/dev ($upstreamShort); nothing to sync."
+            exit 0
+          }
+
+          $syncBranch = 'sync/upstream-dev'
+          Write-Host "Merging upstream/dev ($upstreamShort) into $syncBranch from exo ($origShort)"
+          git checkout -B $syncBranch $origExo 2>&1 | Tee-Object -FilePath $logFile -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Merge rather than rebase so fork subsystem rewrites on `exo` are never force-rebased away.
+          # Generated DX12 bytecode and its hashes conflict whenever upstream and the fork both touch
+          # shaders: keep our copy to complete the merge, then regenerate once before testing.
           $generated = '(\.dxbc|dxbc_hash\.rs|dxbc_pinned_hash\.rs|pass_dxbc_hash\.rs)$'
           $env:GIT_EDITOR = 'true'
           $regen = $false
-          git rebase --empty=drop upstream/dev 2>&1 | Tee-Object -FilePath $logFile -Append
-          $rebaseExit = $LASTEXITCODE
-          for ($step = 0; $rebaseExit -ne 0 -and $step -lt 50; $step++) {
+          git merge --no-edit -m "chore(exo): merge upstream/dev ($upstreamShort)" upstream/dev 2>&1 | Tee-Object -FilePath $logFile -Append
+          $mergeExit = $LASTEXITCODE
+          if ($mergeExit -ne 0) {
             $conflicts = @(git diff --name-only --diff-filter=U)
             $other = @($conflicts | Where-Object { $_ -notmatch $generated })
-            if ($conflicts.Count -eq 0 -or $other.Count -gt 0) { break }
+            if ($conflicts.Count -eq 0 -or $other.Count -gt 0) {
+              git status --short 2>&1 | Tee-Object -FilePath $logFile -Append
+              git merge --abort 2>$null
+              Report-Blocked -Stage 'merge' -UpstreamSha $upstreamShort
+              exit 1
+            }
             foreach ($f in $conflicts) {
               git checkout --ours -- $f
               git add -- $f
             }
             $regen = $true
-            git rebase --continue 2>&1 | Tee-Object -FilePath $logFile -Append
-            $rebaseExit = $LASTEXITCODE
-          }
-          if ($rebaseExit -ne 0) {
-            git status --short 2>&1 | Tee-Object -FilePath $logFile -Append
-            git rebase --abort 2>$null
-            Report-Blocked -Stage 'rebase' -UpstreamSha $upstreamShort
-            exit 1
+            git commit --no-edit 2>&1 | Tee-Object -FilePath $logFile -Append
+            if ($LASTEXITCODE -ne 0) {
+              git status --short 2>&1 | Tee-Object -FilePath $logFile -Append
+              git merge --abort 2>$null
+              Report-Blocked -Stage 'merge' -UpstreamSha $upstreamShort
+              exit 1
+            }
           }
           if ($regen) {
             cargo run --locked -p rune --example regen_dxbc 2>&1 | Tee-Object -FilePath $logFile -Append
@@ -130,7 +145,7 @@ jobs:
             git add -A crates
             git diff --cached --quiet
             if ($LASTEXITCODE -ne 0) {
-              git commit -m "chore(exo): regenerate DX12 uber bytecode after sync onto $upstreamShort" 2>&1 | Tee-Object -FilePath $logFile -Append
+              git commit -m "chore(exo): regenerate DX12 uber bytecode after merge of $upstreamShort" 2>&1 | Tee-Object -FilePath $logFile -Append
             }
           }
 
@@ -174,12 +189,19 @@ jobs:
           }
 
           $newHead = (git rev-parse HEAD).Trim()
-          if ($newHead -ne $origExo) {
-            git push "--force-with-lease=refs/heads/exo:$origExo" origin HEAD:exo 2>&1 | Tee-Object -FilePath $logFile -Append
+
+          # Push safety tags (pre-sync snapshot of `exo` and the tested merge candidate) and the PR branch.
+          # Never push or force-push directly to `origin/exo`.
+          $preTag = "exo-sync-pre-$origShort"
+          $existingPreTag = git ls-remote --tags origin "refs/tags/$preTag"
+          if (-not $existingPreTag) {
+            git tag $preTag $origExo
+            git push origin "refs/tags/$preTag" 2>&1 | Tee-Object -FilePath $logFile -Append
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } else {
-            Write-Host "origin/exo is already at $newHead; no force-push needed."
           }
+
+          git push --force origin "HEAD:refs/heads/$syncBranch" 2>&1 | Tee-Object -FilePath $logFile -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $tag = "exo-sync-$upstreamShort"
           $existingTagLine = git ls-remote --tags origin "refs/tags/$tag"
@@ -192,8 +214,33 @@ jobs:
             Write-Host "Tag $tag already points to $newHead."
           }
 
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $prTitle = "chore(exo): sync upstream/dev ($upstreamShort)"
+          $prBody = @(
+            "Automated weekly merge of ``anomalyco/rune@dev`` (``$upstreamFull``) onto ``exo`` (``$origShort``)."
+            ""
+            "- Merge commit / candidate: ``$newHead`` (tag ``$tag``)"
+            "- Pre-sync ``exo`` safety tag: ``$preTag`` (``$origExo``)"
+            "- Windows core crate test suite passed in run: $runUrl"
+            ""
+            "Review and merge when ready; ``origin/exo`` is never force-rebased."
+          ) -join "`n"
+          $prBodyFile = Join-Path $env:RUNNER_TEMP 'exo-sync-pr.md'
+          Set-Content -Path $prBodyFile -Value $prBody -Encoding utf8
+
+          $existingPr = gh pr list --repo $env:GITHUB_REPOSITORY --state open --head $syncBranch --base exo --json number --jq '.[0].number'
+          if ($existingPr) {
+            gh pr edit $existingPr --repo $env:GITHUB_REPOSITORY --title $prTitle --body-file $prBodyFile | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $prRef = "#$existingPr"
+          } else {
+            $prUrl = gh pr create --repo $env:GITHUB_REPOSITORY --base exo --head $syncBranch --title $prTitle --body-file $prBodyFile
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $prRef = $prUrl
+          }
+
           # Close any previously opened `exo sync blocked` issue once sync succeeds.
           $existing = gh issue list --repo $env:GITHUB_REPOSITORY --state open --search 'in:title "exo sync blocked"' --json number,title --jq '.[] | select(.title == "exo sync blocked") | .number' | Select-Object -First 1
           if ($existing) {
-            gh issue close $existing --repo $env:GITHUB_REPOSITORY --comment "Sync recovered on ``upstream/dev`` (``$upstreamShort``) at tag ``$tag``." | Out-Null
+            gh issue close $existing --repo $env:GITHUB_REPOSITORY --comment "Sync PR ready for ``upstream/dev`` (``$upstreamShort``) at tag ``$tag`` ($prRef)." | Out-Null
           }

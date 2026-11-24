@@ -300,6 +300,10 @@ impl BackdropBlur {
         self.first.clear();
     }
 
+    pub(super) fn unbind_backdrop(&mut self, format: wgpu::TextureFormat) {
+        self.first.retain(|(f, _)| *f != format);
+    }
+
     pub(super) fn bind_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, view: &wgpu::TextureView) {
         let bind = self.level_bind(device, view, &self.dummy);
         match self.first.iter_mut().find(|(f, _)| *f == format) {

@@ -12,6 +12,16 @@ use super::*;
 use fill::Residency;
 
 pub const ATLAS_SIZE: u32 = 2048;
+/// Initial CPU row count for a glyph atlas page (512 KiB instead of 4 MiB); doubles as shelves fill.
+pub const ATLAS_CPU_START_ROWS: u32 = 256;
+
+fn ensure_rows(data: &mut Vec<u8>, needed_rows: u32) {
+    let target_rows = needed_rows.max(ATLAS_CPU_START_ROWS).next_power_of_two().min(ATLAS_SIZE);
+    let target_len = (ATLAS_SIZE * target_rows) as usize;
+    if data.len() < target_len {
+        data.resize(target_len, 0);
+    }
+}
 
 /// Looked up for every glyph of every frame, so hashed with Fx rather than SipHash.
 pub(super) type GlyphMap<V> = HashMap<GlyphKey, V, std::hash::BuildHasherDefault<rune_motion::Fx>>;
@@ -141,7 +151,7 @@ pub struct AtlasPage {
 impl AtlasPage {
     pub(super) fn new(age: u64, epoch: u64) -> Self {
         AtlasPage {
-            data: vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize],
+            data: Vec::new(),
             dirty: None,
             shelf: Shelf::new(age),
             epoch,
@@ -363,10 +373,14 @@ impl Atlas {
             self.dirty = None;
             self.shelf.reset(age);
             self.page0_gen = next_gen;
+            self.data.clear();
+            self.data.shrink_to_fit();
         } else if let Some(p) = self.pages.get_mut(page - 1) {
             p.dirty = None;
             p.shelf.reset(age);
             p.epoch = next_gen;
+            p.data.clear();
+            p.data.shrink_to_fit();
         }
     }
 
@@ -422,11 +436,12 @@ impl Atlas {
     /// first mask, so a text system that only measures (`measure`'s, on each thread that calls it)
     /// never holds its 4 MiB.
     pub(super) fn alloc(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
-        let placed = self.place(w, h);
-        if placed.is_some_and(|(page, ..)| page == 0) && self.data.is_empty() {
-            self.data = vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize];
-        }
-        placed
+        let placed = self.place(w, h)?;
+        let (page, _, y) = placed;
+        let needed_rows = (y + h + 1).min(ATLAS_SIZE);
+        let buf = if page == 0 { &mut self.data } else { &mut self.pages[page - 1].data };
+        ensure_rows(buf, needed_rows);
+        Some(placed)
     }
 
     fn place(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
@@ -595,5 +610,38 @@ impl InPlaceAtlas<'_> {
         }
         self.0.write_bordered_pixels(slot, px, cov);
         true
+    }
+}
+
+#[cfg(test)]
+mod lazy_cpu_tests {
+    use super::*;
+
+    #[test]
+    fn cpu_atlas_grows_lazily_and_reclaims_on_eviction() {
+        let mut atlas = Atlas::new();
+        assert!(atlas.data.is_empty());
+
+        let mask = vec![0xABu8; 16 * 16];
+        let g = atlas.put(16, 16, &mask, 0, 16).expect("first glyph");
+        assert_eq!(g.page, 0);
+        assert_eq!(atlas.data.len(), (ATLAS_SIZE * ATLAS_CPU_START_ROWS) as usize);
+
+        // Fill past 256 rows to trigger doubling to 512 rows without losing earlier glyphs.
+        let tall = vec![0xCDu8; 128 * 128];
+        for _ in 0..40 {
+            let _ = atlas.put(128, 128, &tall, 0, 128).expect("grow glyph");
+        }
+        assert!(atlas.data.len() >= (ATLAS_SIZE * 512) as usize);
+        let first_pixel = atlas.data[(g.y * ATLAS_SIZE + g.x) as usize];
+        assert_eq!(first_pixel, 0xAB, "earlier glyph pixels preserved across growth");
+
+        atlas.evict_page(0);
+        assert!(atlas.data.is_empty(), "evicted page releases CPU backing");
+        assert_eq!(atlas.data.capacity(), 0);
+
+        let g2 = atlas.put(16, 16, &mask, 0, 16).expect("re-alloc after evict");
+        assert_eq!(g2.page, 0);
+        assert_eq!(atlas.data.len(), (ATLAS_SIZE * ATLAS_CPU_START_ROWS) as usize);
     }
 }

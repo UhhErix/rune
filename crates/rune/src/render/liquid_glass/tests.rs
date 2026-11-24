@@ -924,3 +924,167 @@ fn interactive_press_grows_and_overshoots_on_release_and_respects_reduce_motion(
         "reduce motion must stop release overshoot: rest={rm_rest} min={rm_min_rel}"
     );
 }
+
+#[test]
+fn static_backdrop_reuses_liquid_glass_epoch0_pyramid_and_matches_fresh_render() {
+    #[derive(Clone, Copy)]
+    struct State {
+        bg_blue: bool,
+        badge_bright: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> crate::El {
+        let bg = if s.bg_blue {
+            Color { r: 0.09, g: 0.38, b: 0.86, a: 1.0 }
+        } else {
+            Color { r: 0.86, g: 0.25, b: 0.12, a: 1.0 }
+        };
+        let badge = if s.badge_bright {
+            Color { r: 0.98, g: 0.94, b: 0.47, a: 1.0 }
+        } else {
+            Color { r: 0.31, g: 0.35, b: 0.43, a: 1.0 }
+        };
+        el().size(256.0, 256.0)
+            .fill(Color { r: 0.05, g: 0.06, b: 0.09, a: 1.0 })
+            .child(
+                el().absolute(0.0, 0.0)
+                    .size(256.0, 256.0)
+                    .fill(bg),
+            )
+            .child(
+                el().absolute(32.0, 32.0)
+                    .size(160.0, 64.0)
+                    .radius(20.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            )
+            .child(
+                el().absolute(48.0, 48.0)
+                    .size(32.0, 24.0)
+                    .fill(badge),
+            )
+    }
+
+    let gpu = Gpu::headless();
+    let mut cached = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut rt = Runtime::new(
+        State { bg_blue: true, badge_bright: false },
+        view,
+        (256.0, 256.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let f1 = render_runtime(&mut rt, &mut cached, &gpu, 256, 256);
+    assert_eq!(cached.glass_epoch0_reuses(), 0, "first frame must capture epoch 0");
+
+    // Change only content drawn after the Liquid Glass element (backdrop unchanged).
+    rt.update(|s, _| s.badge_bright = true);
+    rt.frame(1.0 / 60.0);
+    let f2_cached = render_runtime(&mut rt, &mut cached, &gpu, 256, 256);
+    assert_ne!(f2_cached, f1, "frame 2 must actually redraw the changed badge");
+    assert_eq!(
+        cached.glass_epoch0_reuses(),
+        1,
+        "unchanged backdrop must reuse cached frost pyramid without pass split"
+    );
+
+    let mut fresh = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let f2_fresh = render_runtime(&mut rt, &mut fresh, &gpu, 256, 256);
+    assert_eq!(f2_cached, f2_fresh, "reused pyramid output must be bit-exact with fresh render");
+
+    // Change backdrop behind the Liquid Glass element -> must invalidate cache and re-capture.
+    rt.update(|s, _| s.bg_blue = false);
+    rt.frame(2.0 / 60.0);
+    let f3_cached = render_runtime(&mut rt, &mut cached, &gpu, 256, 256);
+    assert_ne!(f3_cached, f2_cached, "frame 3 must reflect changed backdrop");
+    assert_eq!(
+        cached.glass_epoch0_reuses(),
+        1,
+        "changed backdrop behind glass must invalidate epoch 0 cache"
+    );
+    let mut fresh3 = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let f3_fresh = render_runtime(&mut rt, &mut fresh3, &gpu, 256, 256);
+    assert_eq!(f3_cached, f3_fresh, "invalidated backdrop must match fresh render");
+}
+
+#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+#[test]
+fn glass_aware_partial_damage_redraws_disjoint_rect_and_declines_overlapping_rect() {
+    #[derive(Clone, Copy)]
+    struct State {
+        btn_lit: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> crate::El {
+        let btn = if s.btn_lit {
+            Color { r: 0.16, g: 0.86, b: 0.47, a: 1.0 }
+        } else {
+            Color { r: 0.24, g: 0.27, b: 0.35, a: 1.0 }
+        };
+        el().size(400.0, 520.0)
+            .fill(Color { r: 0.07, g: 0.09, b: 0.13, a: 1.0 })
+            .child(
+                el().absolute(120.0, 12.0)
+                    .size(160.0, 40.0)
+                    .radius(20.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            )
+            .child(
+                el().absolute(40.0, 440.0)
+                    .size(120.0, 48.0)
+                    .fill(btn),
+            )
+    }
+
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut rt = Runtime::new(
+        State { btn_lit: false },
+        view,
+        (400.0, 520.0),
+        Env::new(true, 1.0),
+    );
+    let draw_with_damage = |rt: &mut Runtime<State>, renderer: &mut Renderer, rects: &[[u32; 4]]| {
+        renderer.set_srgb_blend(rt.srgb_blend());
+        renderer.set_fade_stops(rt.fade_stops());
+        renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
+        renderer.set_liquid_glass(rt.liquid_glass_frame());
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (400, 520));
+        renderer.arm_damage(&gpu.device, &gpu.queue, rects, rt.clear_color(), (400, 520), OFFSCREEN_FORMAT);
+        let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("damage dst"),
+            size: wgpu::Extent3d { width: 400, height: 520, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OFFSCREEN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&Default::default());
+        let readback = rune_staging::Readback::new(&gpu.device, "damage readback", 400, 520, 4);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &view, rt.clear_color());
+        let outcome = renderer.damage_drawn();
+        readback.copy_from(&mut enc, &tex);
+        gpu.queue.submit([enc.finish()]);
+        readback.buffer().slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).expect("poll");
+        (outcome, readback.take_mapped())
+    };
+
+    rt.frame(0.0);
+    let (r1, p1) = draw_with_damage(&mut rt, &mut renderer, &[[36, 436, 128, 56]]);
+    assert!(r1.is_ok(), "disjoint rect seeds kept frame with liquid glass: {r1:?}");
+
+    rt.update(|s, _| s.btn_lit = true);
+    rt.frame(1.0 / 60.0);
+    let (r2, p2_partial) = draw_with_damage(&mut rt, &mut renderer, &[[36, 436, 128, 56]]);
+    assert!(r2.is_ok(), "disjoint rect redraws partially while glass stays intact: {r2:?}");
+    assert_ne!(p2_partial, p1, "partial redraw must update the lit button");
+
+    let mut fresh = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let p2_fresh = render_runtime(&mut rt, &mut fresh, &gpu, 400, 520);
+    assert_eq!(p2_partial, p2_fresh, "glass-aware partial damage must match full render pixel-for-pixel");
+
+    // Overlapping rect must decline partial damage cleanly.
+    let (r3, _) = draw_with_damage(&mut rt, &mut renderer, &[[120, 12, 160, 40]]);
+    assert_eq!(r3, Err("liquid glass"));
+}

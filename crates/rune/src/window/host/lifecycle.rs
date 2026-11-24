@@ -581,16 +581,20 @@ impl Host {
         }
         self.app.run_on_rest();
         if let Some((gpu, renderer)) = &mut self.gpu {
-            // Poll once (non-blocking) at idle rest only if recyclable oversized chunks are in
-            // flight so their completed buffers return before `give_back(false)` trims them;
-            // ordinary windows skip polling to avoid the 4-9 ms Iris Xe post-poll penalty.
-            if !all && renderer.has_oversized_uploads_in_flight() {
+            let had_oversized = !all && renderer.has_oversized_uploads_in_flight();
+            if had_oversized {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
-            renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
+            let dropped = renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
-            // submission and a wait land those frees now.
+            // submission and a wait land those frees now. At visible rest (after REST_AFTER = 10s
+            // of idle), the prior frame is long complete, so polling immediately reclaims dropped
+            // textures and empty GPU allocator blocks without stalling any frame.
             if all {
+                gpu.queue.submit(std::iter::empty());
+                rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+                renderer.trim_uploads();
+            } else if dropped || had_oversized {
                 gpu.queue.submit(std::iter::empty());
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
                 renderer.trim_uploads();

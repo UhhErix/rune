@@ -76,6 +76,18 @@ impl LiquidGlassFrame {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CachedEpochKey {
+    pub format: wgpu::TextureFormat,
+    pub viewport: (u32, u32),
+    pub clear: [u64; 4],
+    pub region: [u32; 4],
+    pub origin: [u32; 2],
+    pub size: [u32; 2],
+    pub max_mip: usize,
+    pub pyramid_size: [u32; 2],
+}
+
 pub(super) struct LiquidGlassPass {
     down_pipeline: wgpu::RenderPipeline,
     down_layout: wgpu::BindGroupLayout,
@@ -108,6 +120,12 @@ pub(super) struct LiquidGlassPass {
     /// True if composite pipeline failed on a broken driver (breaker fallback rewrites records to `Kind::Rect`).
     broken: bool,
     stats: LiquidGlassStats,
+    /// True when the single epoch 0's backdrop region had no changes since the last `prepare`.
+    epoch0_backdrop_unchanged: bool,
+    /// Key of the backdrop + frost pyramid currently stored on the GPU for epoch 0.
+    cached_epoch: Mutex<Option<CachedEpochKey>>,
+    #[cfg(test)]
+    pub(super) epoch0_reuses: std::sync::atomic::AtomicU64,
 }
 
 impl LiquidGlassPass {
@@ -308,6 +326,17 @@ impl LiquidGlassPass {
             viewport: (0, 0),
             broken: false,
             stats: LiquidGlassStats::default(),
+            epoch0_backdrop_unchanged: false,
+            cached_epoch: Mutex::new(None),
+            #[cfg(test)]
+            epoch0_reuses: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub(super) fn invalidate_cache(&mut self) {
+        self.epoch0_backdrop_unchanged = false;
+        if let Ok(mut g) = self.cached_epoch.lock() {
+            *g = None;
         }
     }
 
@@ -318,6 +347,13 @@ impl LiquidGlassPass {
         self.still_bind = None;
         self.probe_bind = None;
         self.stats.pyramid_bytes = 0;
+        self.invalidate_cache();
+    }
+
+    pub(super) fn unbind_backdrop(&mut self, format: wgpu::TextureFormat) {
+        self.first_down.retain(|(f, _)| *f != format);
+        self.composite_binds.retain(|(f, _)| *f != format);
+        self.invalidate_cache();
     }
 
     pub(super) fn bind_backdrop(
@@ -326,6 +362,7 @@ impl LiquidGlassPass {
         format: wgpu::TextureFormat,
         view: &wgpu::TextureView,
     ) {
+        self.invalidate_cache();
         let down_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("liquid glass down 0"),
             layout: &self.down_layout,
@@ -528,6 +565,7 @@ impl LiquidGlassPass {
         if size == have && self.pyramid.is_some() {
             return;
         }
+        self.invalidate_cache();
         self.pyramid = Some(create_pyramid(
             device,
             size,

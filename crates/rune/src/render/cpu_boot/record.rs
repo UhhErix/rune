@@ -29,7 +29,13 @@ pub fn encode(scene: &Scene<'_>) -> Vec<u8> {
     out.extend_from_slice(&(scene.instances.len() as u32).to_le_bytes());
     out.extend_from_slice(bytemuck::cast_slice(scene.instances));
     out.extend_from_slice(&(scene.glyph_pages.len() as u32).to_le_bytes());
-    for page in &scene.glyph_pages { out.extend_from_slice(page); }
+    let side = (ATLAS_SIZE * ATLAS_SIZE) as usize;
+    for page in &scene.glyph_pages {
+        out.extend_from_slice(page);
+        if page.len() < side {
+            out.resize(out.len() + (side - page.len()), 0);
+        }
+    }
     out.extend_from_slice(&(scene.images.len() as u32).to_le_bytes());
     for image in &scene.images {
         let height = image.data.len() as u32 / (image.width * 4).max(1);

@@ -337,6 +337,10 @@ pub struct ImagePage {
     pub data: Vec<u8>,
     /// Rows `[y0, y1)` changed since the last upload.
     pub dirty: Option<(u32, u32)>,
+    /// Whether `data` has been uploaded to a live GPU texture (`Renderer::upload_images`).
+    pub gpu_resident: bool,
+    /// CPU backing (`data`) was released at rest while the GPU texture stays resident.
+    sealed: bool,
     shelf_x: u32,
     shelf_y: u32,
     shelf_h: u32,
@@ -441,7 +445,11 @@ impl ImageAtlas {
         };
         if w > max_side() || h > max_side() { return None; }
         let key = (pixels.id, level);
-        if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h) {
+        if self.slots.get(&key).is_some_and(|s| {
+            s.w != w
+                || s.h != h
+                || ((s.generation != generation || s.frame != shown) && self.pages[s.page].data.is_empty())
+        }) {
             self.slots.remove(&key);
         }
         if !self.slots.contains_key(&key) {
@@ -493,6 +501,8 @@ impl ImageAtlas {
             if !self.slots.values().any(|slot| slot.page == i) {
                 (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
                 page.dirty = None;
+                page.gpu_resident = false;
+                page.sealed = false;
                 if page.width > IMAGE_ATLAS_SIZE || page.height > IMAGE_ATLAS_SIZE {
                     page.data = Vec::new();
                 }
@@ -503,8 +513,9 @@ impl ImageAtlas {
     }
 
     /// A window at rest (`window::rest`): forgets the images no element showed in the last
-    /// frame, the first page's included, and frees the CPU copy of every page left empty. An
-    /// image shown again after it is copied in again.
+    /// frame, the first page's included, and frees the CPU copy of every page left empty as well
+    /// as every GPU-resident clean page (keeping its GPU texture and slots intact). An image
+    /// shown again after eviction is copied in again.
     pub fn rest(&mut self) {
         let pages = &self.pages;
         self.slots.retain(|_, s| pages[s.page].shown);
@@ -514,6 +525,11 @@ impl ImageAtlas {
             if !self.slots.values().any(|slot| slot.page == i) {
                 (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
                 page.dirty = None;
+                page.gpu_resident = false;
+                page.sealed = false;
+                page.data = Vec::new();
+            } else if page.gpu_resident && page.dirty.is_none() {
+                page.sealed = true;
                 page.data = Vec::new();
             }
         }
@@ -531,13 +547,35 @@ impl ImageAtlas {
         had
     }
 
-    /// Marks every row for upload (a new texture).
+    /// Marks every row for upload (a new texture). Pages whose CPU backing was dropped at rest
+    /// drop their slots so the next frame copies them back from each `Pixels`.
     pub fn invalidate(&mut self) {
-        for page in &mut self.pages { page.dirty = Some((0, page.height)); }
+        let dropped = self.pages.iter().any(|p| p.data.is_empty());
+        if dropped {
+            let pages = &self.pages;
+            self.slots.retain(|_, s| !pages[s.page].data.is_empty());
+            let slots = &self.slots;
+            self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
+        }
+        for page in &mut self.pages {
+            if page.data.is_empty() {
+                (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+                page.dirty = None;
+                page.gpu_resident = false;
+                page.sealed = false;
+            } else {
+                page.dirty = Some((0, page.height));
+            }
+        }
+        if dropped {
+            let keep = self.slots.values().map(|s| s.page + 1).max().unwrap_or(0);
+            self.pages.truncate(keep);
+        }
     }
 
     fn allocate(&mut self, w: u32, h: u32) -> (usize, u32, u32) {
         for (i, page) in self.pages.iter_mut().enumerate() {
+            if page.sealed { continue; }
             if page.data.is_empty() { *page = ImagePage::new(w, h); }
             if let Some((x, y)) = page.allocate(w, h) { return (i, x, y); }
         }
@@ -548,7 +586,12 @@ impl ImageAtlas {
         if w <= IMAGE_ATLAS_SIZE && h <= IMAGE_ATLAS_SIZE && let Some(i) = self.pages.iter().position(idle) {
             self.slots.retain(|_, s| s.page != i);
             let page = &mut self.pages[i];
-            (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+            if page.data.is_empty() {
+                *page = ImagePage::new(w, h);
+            } else {
+                (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+                page.sealed = false;
+            }
             let (x, y) = page.allocate(w, h).unwrap();
             return (i, x, y);
         }
@@ -567,10 +610,11 @@ impl ImagePage {
         let (width, height) = if w > IMAGE_ATLAS_SIZE || h > IMAGE_ATLAS_SIZE { (w, h) }
             else { (IMAGE_ATLAS_SIZE, h.next_power_of_two().max(IMAGE_PAGE_START_ROWS)) };
         Self { width, height, data: vec![0; width as usize * height as usize * 4],
-            dirty: None, shelf_x: 0, shelf_y: 0, shelf_h: 0, shown: false, touched: false }
+            dirty: None, gpu_resident: false, sealed: false, shelf_x: 0, shelf_y: 0, shelf_h: 0, shown: false, touched: false }
     }
 
     fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        if self.sealed { return None; }
         let shelf = self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE;
         if w > self.width || h > if shelf { IMAGE_ATLAS_SIZE } else { self.height } { return None; }
         if self.shelf_x + w > self.width {
