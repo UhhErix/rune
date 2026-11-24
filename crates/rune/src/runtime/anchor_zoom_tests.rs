@@ -123,3 +123,62 @@ fn at_zoom_one_point_six_a_fitted_list_fits_the_room_it_draws_in() {
 }
 
 fn rect_of<T>(rt: &Runtime<T>, key: &str) -> [f32; 4] { rt.presented(key).unwrap().0 }
+
+#[test]
+fn fade_only_presence_transition_stays_scale_still_while_scale_transition_is_moving() {
+    use crate::Transition;
+
+    #[derive(Clone, Copy)]
+    struct P {
+        show: bool,
+    }
+
+    fn view_presence(s: &P, _: &mut Cx<P>) -> El {
+        let mut root = col().size(400.0, 200.0);
+        if s.show {
+            root = root
+                .child(
+                    el().key("fade")
+                        .size(100.0, 40.0)
+                        .fill(crate::Color::WHITE)
+                        .transition(Transition::opacity()),
+                )
+                .child(
+                    el().key("scaled")
+                        .size(100.0, 40.0)
+                        .fill(crate::Color::WHITE)
+                        .transition(Transition::scale(0.85)),
+                );
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(P { show: false }, view_presence, (400.0, 200.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    // Insert both nodes so their presence springs are actively animating.
+    rt.update(|s, _| s.show = true);
+    rt.frame(1.0 / 60.0);
+    rt.frame(1.0 / 60.0);
+
+    let fade_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("fade")).unwrap();
+    let scaled_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("scaled")).unwrap();
+    let store = rt.scene.store();
+    assert!(store.is_animating(rt.tree.nodes[fade_idx].id, rune_motion::prop::PRESENCE), "fade presence should be animating");
+    assert!(store.is_animating(rt.tree.nodes[scaled_idx].id, rune_motion::prop::PRESENCE), "scaled presence should be animating");
+
+    assert!(
+        rt.paint.inh_scratch[fade_idx].scale_motion == ScaleMotion::Still,
+        "pure-opacity presence transition (scale == 1.0) must stay ScaleMotion::Still"
+    );
+    assert!(
+        rt.paint.inh_scratch[scaled_idx].scale_motion == ScaleMotion::Moving,
+        "scale presence transition must be ScaleMotion::Moving while animating"
+    );
+
+    // Once settled, the scale transition returns to ScaleMotion::Still.
+    for _ in 0..120 {
+        rt.frame(1.0 / 60.0);
+    }
+    let scaled_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("scaled")).unwrap();
+    assert!(rt.paint.inh_scratch[scaled_idx].scale_motion == ScaleMotion::Still);
+}

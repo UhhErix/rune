@@ -246,9 +246,9 @@ impl RuntimeCore {
                 || (n.scale_track && store.is_animating(n.id, P_SCALE))
                 || sequence.is_some_and(|l| !self.reduced_motion && l.active(lnow));
             let presence_anim = store.is_animating(n.id, prop::PRESENCE);
-            let scale_animating = store.is_animating(n.id, prop::SCALE) || presence_anim || own_scale_anim;
             let presence_scales = presence_anim
                 && n.transition.as_deref().is_some_and(|t| t.insertion.scale != 1.0 || t.removal.scale != 1.0);
+            let scale_animating = store.is_animating(n.id, prop::SCALE) || presence_scales || own_scale_anim;
             let own_scale_moving = presence_scales || own_scale_anim;
             let scale_motion = pinh.scale_motion.max(
                 if !has_live_scale && (scale_animating || scale_settling) {
