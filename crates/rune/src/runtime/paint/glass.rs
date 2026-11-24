@@ -118,14 +118,17 @@ impl GlassPaintState {
         while let Some(top) = self.containers.last() {
             let ancestor = top.node_index;
             let mut parent = node_parent;
-            while parent.is_some_and(|p| p != ancestor) {
-                parent = nodes[parent.unwrap()].parent;
+            while let Some(p) = parent
+                && p != ancestor
+            {
+                parent = nodes[p].parent;
             }
             if parent == Some(ancestor) {
                 break;
             }
-            let c = self.containers.pop().unwrap();
-            self.finish_container(c, instances);
+            if let Some(c) = self.containers.pop() {
+                self.finish_container(c, instances);
+            }
         }
     }
 

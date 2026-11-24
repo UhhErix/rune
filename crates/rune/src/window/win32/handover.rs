@@ -299,6 +299,7 @@ impl Host {
             let rt = self.app.rt_mut();
             renderer.set_fade_stops(rt.fade_stops());
             renderer.set_max_backdrop_blurs(rt.max_backdrop_blurs());
+            renderer.set_liquid_glass(rt.liquid_glass_frame());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
             renderer.draw(&mut enc, &view, rt.clear_color());
         }
