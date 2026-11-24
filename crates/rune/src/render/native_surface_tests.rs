@@ -270,3 +270,27 @@ fn video_continuous_corners_match_uber_shader() {
         );
     }
 }
+
+#[test]
+fn video_element_accepts_m3u8_url_poster_and_callbacks() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let ready_called = Arc::new(AtomicBool::new(false));
+    let error_called = Arc::new(AtomicBool::new(false));
+    let r = ready_called.clone();
+    let e = error_called.clone();
+    let poster = crate::Pixels::new();
+    poster.set(2, 2, [255, 0, 0, 255].into_iter().cycle().take(16).collect());
+
+    let node = crate::video("https://example.com/trailer/master.m3u8")
+        .video_fit(SurfaceFit::Fill)
+        .video_poster(poster)
+        .on_ready(move || r.store(true, Ordering::SeqCst))
+        .on_error(move |_| e.store(true, Ordering::SeqCst));
+
+    let (surface, fit) = node.vis.surface.as_ref().expect("video element attaches a surface");
+    assert_eq!(*fit, SurfaceFit::Fill);
+    assert!(surface.video().is_some(), "video element attaches a Player");
+    assert!(!ready_called.load(Ordering::SeqCst));
+}

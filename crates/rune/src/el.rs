@@ -335,6 +335,14 @@ pub fn canvas(shape: Shape) -> El {
     e
 }
 
+/// A video element playing `src` (an existing `&Player`, a `Player`, a local path, or an
+/// `http(s)://` URL including `.m3u8` HLS playlists). Defaults to `SurfaceFit::Fit`; chain
+/// `.video_fit(...)`, `.video_poster(...)`, `.on_ready(...)`, and `.on_error(...)`.
+pub fn video(src: impl Into<crate::Player>) -> El {
+    let player = src.into();
+    el().video(&player, crate::SurfaceFit::Fit)
+}
+
 impl El {
 
     /// Bind opacity directly to a latest-wins value, without rebuilding or laying out the view.

@@ -71,11 +71,16 @@ fn bare_audio() -> Arc<Shared> {
     Arc::new(Shared {
         source: MediaSource::from("missing.m4a"),
         headers: Vec::new(),
+        force_hls: false,
         kind: Kind::Audio,
         ctl: Mutex::new(Control { muted: false, kind: Kind::Audio, ..Control::default() }),
         wakes: Mutex::new(Vec::new()),
         waker: WakerSlot::default(),
         notified: AtomicU64::new(0),
+        display_size: Arc::new(AtomicU64::new(0)),
+        active_variant: Arc::new(Mutex::new(None)),
+        poster: Mutex::new(None),
+        callbacks: Mutex::new(callbacks::Callbacks::default()),
         native: Mutex::new(backend::Native::default()),
         backend: &BACKEND,
     })

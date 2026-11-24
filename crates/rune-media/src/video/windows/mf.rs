@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::Com::IStream;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Variant::VT_I8;
@@ -26,6 +27,8 @@ type CreateAttributes = unsafe extern "system" fn(*mut *mut core::ffi::c_void, u
 type CreateMediaType = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
 type CreateDeviceManager = unsafe extern "system" fn(*mut u32, *mut *mut core::ffi::c_void) -> HRESULT;
 type CreateFile = unsafe extern "system" fn(MF_FILE_ACCESSMODE, MF_FILE_OPENMODE, MF_FILE_FLAGS, PCWSTR, *mut *mut core::ffi::c_void) -> HRESULT;
+type CreateByteStreamOnStream = unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT;
+type CreateMemStream = unsafe extern "system" fn(*const u8, u32) -> *mut core::ffi::c_void;
 type CreateResolver = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
 type CreateReaderFromSource = unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT;
 
@@ -35,6 +38,8 @@ pub(super) struct Library {
     create_media_type: CreateMediaType,
     create_device_manager: CreateDeviceManager,
     create_file: CreateFile,
+    create_byte_stream_on_stream: Option<CreateByteStreamOnStream>,
+    create_mem_stream: Option<CreateMemStream>,
     create_resolver: CreateResolver,
     create_reader: CreateReaderFromSource,
 }
@@ -50,6 +55,7 @@ fn load() -> Result<Library, String> {
     let missing = || "Media Foundation isn't installed (a Windows N edition without the Media Feature Pack)".to_string();
     let plat = system_library("mfplat.dll").ok_or_else(missing)?;
     let rw = system_library("mfreadwrite.dll").ok_or_else(missing)?;
+    let shlwapi = system_library("shlwapi.dll");
     // SAFETY: each symbol is looked up by its documented name and cast to its documented signature.
     unsafe {
         let startup: Startup = symbol(plat, c"MFStartup").ok_or_else(missing)?;
@@ -58,6 +64,8 @@ fn load() -> Result<Library, String> {
             create_media_type: symbol(plat, c"MFCreateMediaType").ok_or_else(missing)?,
             create_device_manager: symbol(plat, c"MFCreateDXGIDeviceManager").ok_or_else(missing)?,
             create_file: symbol(plat, c"MFCreateFile").ok_or_else(missing)?,
+            create_byte_stream_on_stream: symbol(plat, c"MFCreateMFByteStreamOnStream"),
+            create_mem_stream: shlwapi.and_then(|m| symbol(m, c"SHCreateMemStream")),
             create_resolver: symbol(plat, c"MFCreateSourceResolver").ok_or_else(missing)?,
             create_reader: symbol(rw, c"MFCreateSourceReaderFromMediaSource").ok_or_else(missing)?,
         };
@@ -132,6 +140,41 @@ impl Library {
                     resolver.CreateObjectFromURL(url, flags, None, &mut kind, &mut object).map_err(open_error)?;
                 }
             }
+            object.ok_or("no media source")?.cast::<IMFMediaSource>().map_err(|e| e.message())
+        }
+    }
+
+    /// Opens an in-memory media buffer (`ext` is `"mp4"` for fMP4 or `"ts"` for MPEG-TS) through
+    /// Media Foundation's byte-stream resolver with zero disk I/O.
+    pub(super) fn resolve_bytes(&self, bytes: &[u8], ext: &str) -> Result<IMFMediaSource, String> {
+        if bytes.is_empty() {
+            return Err("empty HLS segment".into());
+        }
+        let len = u32::try_from(bytes.len()).map_err(|_| "HLS segment exceeds 4 GiB".to_string())?;
+        let create_mem = self
+            .create_mem_stream
+            .ok_or_else(|| "SHCreateMemStream isn't available on this Windows system".to_string())?;
+        let create_bs = self
+            .create_byte_stream_on_stream
+            .ok_or_else(|| "MFCreateMFByteStreamOnStream isn't available on this Windows system".to_string())?;
+        let mut res_raw = std::ptr::null_mut();
+        // SAFETY: `SHCreateMemStream` copies `bytes` into an owned COM `IStream`, which
+        // `MFCreateMFByteStreamOnStream` wraps in an `IMFByteStream` for `IMFSourceResolver`.
+        unsafe {
+            let istream_raw = create_mem(bytes.as_ptr(), len);
+            if istream_raw.is_null() {
+                return Err("failed to allocate memory stream for HLS segment".into());
+            }
+            let istream = IStream::from_raw(istream_raw);
+            let mut bs_raw = std::ptr::null_mut();
+            create_bs(istream.as_raw(), &mut bs_raw).ok().map_err(open_error)?;
+            let stream = IMFByteStream::from_raw(bs_raw);
+            (self.create_resolver)(&mut res_raw).ok().map_err(|e| e.message())?;
+            let resolver = IMFSourceResolver::from_raw(res_raw);
+            let (mut kind, mut object) = (MF_OBJECT_INVALID, None);
+            let flags = (MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_READ | MF_RESOLUTION_DISABLE_LOCAL_PLUGINS).0 as u32;
+            let hint = HSTRING::from(format!("segment.{ext}"));
+            resolver.CreateObjectFromByteStream(&stream, &hint, flags, None, &mut kind, &mut object).map_err(open_error)?;
             object.ok_or("no media source")?.cast::<IMFMediaSource>().map_err(|e| e.message())
         }
     }

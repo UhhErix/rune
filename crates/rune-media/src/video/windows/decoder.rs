@@ -49,7 +49,7 @@ const LAYER_STARVED: Duration = Duration::from_millis(250);
 const GPU_WAIT: Duration = Duration::from_secs(3);
 
 /// `decode`'s answer when Rune's device was replaced under the ring: not a failure.
-const DEVICE_CHANGED: &str = "Rune's GPU device changed";
+pub(super) const DEVICE_CHANGED: &str = "Rune's GPU device changed";
 
 /// What opening found.
 #[derive(Clone, Copy, Debug)]
@@ -152,6 +152,8 @@ pub(super) fn superseded(pos: f64, pts: f64, frame: f64, since: Option<Duration>
 /// What a decoder starts with.
 pub(super) struct Job {
     pub source: MediaSource,
+    pub headers: Vec<(String, String)>,
+    pub hls: bool,
     pub kind: Kind,
     /// Clip seconds to start at, and that start's generation.
     pub start: f64,
@@ -162,6 +164,10 @@ pub(super) struct Job {
     pub notify: Box<dyn Fn() + Send>,
     /// The clock audio follows.
     pub clock: Arc<audio::Clock>,
+    /// Packed `(width << 32) | height` physical display size for ABR resolution capping.
+    pub display_size: Arc<std::sync::atomic::AtomicU64>,
+    /// Current active HLS variant metadata slot.
+    pub active_variant: Arc<std::sync::Mutex<Option<super::super::hls::HlsVariantInfo>>>,
     /// When the UI asked for the clip.
     pub started: Instant,
 }
@@ -226,7 +232,7 @@ pub(super) fn us(t0: Instant) -> u128 {
 /// The decoders' device on Rune's GPU. A window drawn on the CPU first (`window::cpu_frame`)
 /// makes its GPU after its first frame, and a clip that opens before then would decode on the CPU
 /// for good: it waits for the GPU as long as one takes to come, while the source resolves.
-fn rune_device() -> Option<Arc<gpu::Device>> {
+pub(super) fn rune_device() -> Option<Arc<gpu::Device>> {
     let deadline = rune_core::time::now() + GPU_WAIT;
     loop {
         match gpu::device() {
@@ -240,6 +246,10 @@ fn rune_device() -> Option<Arc<gpu::Device>> {
 }
 
 fn run(pipe: &Pipe, job: Job) {
+    if job.hls {
+        super::hls::run(pipe, job);
+        return;
+    }
     rune_core::marks::mark("video.open");
     let generation = crate::native_surface::windows::device_generation();
     let mut d = match Decoder::open(&job) {

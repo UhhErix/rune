@@ -739,6 +739,44 @@ impl El {
     pub fn video(self, video: &crate::Player, fit: crate::SurfaceFit) -> Self {
         self.native_surface(video.surface(), fit)
     }
+    /// Changes the [`SurfaceFit`] (`Fit` or `Fill`) of a video or native surface attached to this
+    /// node.
+    pub fn video_fit(mut self, fit: crate::SurfaceFit) -> Self {
+        if let Some((_, existing_fit)) = &mut self.vis.cold_mut().surface {
+            *existing_fit = fit;
+        }
+        self
+    }
+    /// Sets a poster image on the video attached to this node, displayed while loading and as the
+    /// error fallback if loading or playback fails.
+    pub fn video_poster(self, poster: crate::Pixels) -> Self {
+        if let Some((surface, _)) = &self.vis.surface
+            && let Some(video) = surface.video()
+        {
+            video.set_poster(surface, Some(poster));
+        }
+        self
+    }
+    /// Registers a one-shot callback invoked when the video attached to this node becomes ready
+    /// to play.
+    pub fn on_ready(self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        if let Some((surface, _)) = &self.vis.surface
+            && let Some(video) = surface.video()
+        {
+            video.set_on_ready(std::sync::Arc::new(f));
+        }
+        self
+    }
+    /// Registers a one-shot callback invoked if the video attached to this node fails to load or
+    /// play (while the element falls back to its poster image, if set).
+    pub fn on_error(self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        if let Some((surface, _)) = &self.vis.surface
+            && let Some(video) = surface.video()
+        {
+            video.set_on_error(std::sync::Arc::new(f));
+        }
+        self
+    }
     /// Turn this element's icon by `radians`, clockwise about its centre: a disclosure chevron
     /// pointing right when closed and down when open. A change springs on the element's
     /// [`motion`](Self::motion) and jumps under reduced motion. Only the glyph turns; layout and
