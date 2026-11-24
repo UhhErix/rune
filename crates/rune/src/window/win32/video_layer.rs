@@ -13,13 +13,14 @@
 //! region the UI presents, which costs nothing while it's still but 12-15% of an integrated GPU
 //! while it animates (`proof\video-win\layer`).
 
-use crate::native_surface::{SurfaceDraw, place};
+use crate::native_surface::{ExternalHostEvent, SurfaceDraw, place};
 use crate::platform::win32::dcomp_handover::Handover;
 use crate::time::Instant;
 use crate::video::LayerSurface;
 use std::sync::Arc;
 use std::time::Duration;
 use windows::Win32::Graphics::DirectComposition::IDCompositionVisual;
+use windows::core::Interface;
 
 /// How long no layer shows before the UI's swap chain goes back to opaque.
 const OPAQUE_AFTER: Duration = Duration::from_secs(2);
@@ -117,9 +118,16 @@ pub(in crate::window) struct Frame {
     pub again: bool,
 }
 
+struct ExternalEntry {
+    key: usize,
+    visual: Option<(IDCompositionVisual, Option<u64>)>,
+    last_rect: Option<[i32; 4]>,
+}
+
 #[derive(Default)]
 pub(in crate::window) struct VideoLayers {
     entries: Vec<Entry>,
+    externals: Vec<ExternalEntry>,
     /// The UI's swap chain should composite premultiplied (Some(true)) or opaque (Some(false));
     /// `Host::draw` makes it so before its next frame.
     pending_alpha: Option<bool>,
@@ -132,12 +140,81 @@ pub(in crate::window) struct VideoLayers {
 
 impl VideoLayers {
     /// Before a frame's surfaces are prepared: steps each drawn clip and carries out its effect.
+    #[allow(unsafe_code)]
     pub(in crate::window) fn frame(&mut self, draws: &[SurfaceDraw], handover: Option<&Handover>, premultiplied: bool, punch_ready: bool) -> Frame {
         let mut out = Frame::default();
         let window_ready = handover.is_some() && premultiplied && punch_ready && enabled();
         let mut wanted = false;
         let mut kept = Vec::with_capacity(draws.len());
+        let mut kept_ext = Vec::with_capacity(draws.len());
+        let mut ext_dirty = false;
         for d in draws {
+            let ext_layer = d.surface.external_layer();
+            let ext_host = d.surface.has_external_host();
+            if ext_layer.is_some() || ext_host {
+                let key = d.surface.key();
+                if kept_ext.contains(&key) {
+                    continue;
+                }
+                kept_ext.push(key);
+                wanted = true;
+                let rect = [
+                    d.rect[0].round() as i32,
+                    d.rect[1].round() as i32,
+                    d.rect[2].round().max(1.0) as i32,
+                    d.rect[3].round().max(1.0) as i32,
+                ];
+                if let Some(h) = handover {
+                    let entry = match self.externals.iter().position(|e| e.key == key) {
+                        Some(i) => &mut self.externals[i],
+                        None => {
+                            self.externals.push(ExternalEntry { key, visual: None, last_rect: None });
+                            self.externals.last_mut().unwrap()
+                        }
+                    };
+                    let mut visual_changed = false;
+                    if let Some(layer) = ext_layer {
+                        if entry.visual.as_ref().is_none_or(|(_, id)| *id != Some(layer.id)) {
+                            if let Some((old, _)) = entry.visual.take() {
+                                h.remove(&old);
+                            }
+                            if let Ok(v) = h.add_under(layer.handle) {
+                                entry.visual = Some((v, Some(layer.id)));
+                                visual_changed = true;
+                            }
+                        }
+                    } else if entry.visual.is_none()
+                        && let Ok(v) = h.add_under_empty()
+                    {
+                        entry.visual = Some((v, None));
+                        visual_changed = true;
+                    }
+                    if let Some((visual, _)) = &entry.visual {
+                        if visual_changed || entry.last_rect != Some(rect) {
+                            unsafe {
+                                visual.SetOffsetX2(rect[0] as f32).ok();
+                                visual.SetOffsetY2(rect[1] as f32).ok();
+                            }
+                            entry.last_rect = Some(rect);
+                            ext_dirty = true;
+                            d.surface.notify_external_host(ExternalHostEvent {
+                                hwnd: h.hwnd(),
+                                dcomp_device: h.device_raw() as usize,
+                                slot_visual: visual.as_raw() as usize,
+                                rect,
+                            });
+                        }
+                        if premultiplied && punch_ready {
+                            out.punched.push(key);
+                        } else {
+                            out.again = true;
+                        }
+                    }
+                } else {
+                    out.again = true;
+                }
+                continue;
+            }
             let (Some(video), Some(frame)) = (d.surface.video(), d.surface.latest()) else { continue };
             let key = d.surface.key();
             if kept.contains(&key) {
@@ -211,7 +288,17 @@ impl VideoLayers {
             }
             drawn
         });
-        if self.entries.len() != before
+        let ext_before = self.externals.len();
+        self.externals.retain(|e| {
+            let drawn = kept_ext.contains(&e.key);
+            if !drawn
+                && let (Some(h), Some((v, _))) = (handover, &e.visual)
+            {
+                h.remove(v);
+            }
+            drawn
+        });
+        if (self.entries.len() != before || self.externals.len() != ext_before || ext_dirty)
             && let Some(h) = handover
         {
             h.commit().ok();
@@ -232,6 +319,11 @@ impl VideoLayers {
     pub(in crate::window) fn release(&mut self, handover: Option<&Handover>) {
         for e in self.entries.drain(..) {
             release(handover, &e);
+        }
+        for e in self.externals.drain(..) {
+            if let (Some(h), Some((v, _))) = (handover, &e.visual) {
+                h.remove(v);
+            }
         }
         if let Some(h) = handover {
             h.commit().ok();

@@ -5,6 +5,12 @@ pub mod native_surface;
 pub mod recorder;
 pub mod video;
 
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalHostCallback;
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalHostEvent;
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalLayer;
 pub use native_surface::NativeSurface;
 pub use native_surface::SurfaceFit;
 pub use recorder::FakeMicrophone;

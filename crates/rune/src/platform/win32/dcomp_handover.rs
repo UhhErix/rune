@@ -15,6 +15,7 @@ use windows::Win32::Graphics::DirectComposition::{IDCompositionDevice, IDComposi
 use windows::core::{GUID, HRESULT, Interface};
 
 pub(crate) struct Handover {
+    hwnd: isize,
     device: IDCompositionDevice,
     _target: IDCompositionTarget,
     /// The target's root: no content of its own; the UI's visual and, under it, any clip's layer.
@@ -39,7 +40,20 @@ impl Handover {
             let visual = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
             root.AddVisual(&visual, true, None).map_err(|e| format!("AddVisual: {e}"))?;
             target.SetRoot(&root).map_err(|e| format!("SetRoot: {e}"))?;
-            Ok(Handover { device, _target: target, root, visual })
+            Ok(Handover { hwnd, device, _target: target, root, visual })
+        }
+    }
+
+    pub(crate) fn hwnd(&self) -> isize { self.hwnd }
+
+    pub(crate) fn device_raw(&self) -> *mut std::ffi::c_void { self.device.as_raw() }
+
+    pub(crate) fn add_under_empty(&self) -> Result<IDCompositionVisual, String> {
+        // SAFETY: COM calls on our device and visuals.
+        unsafe {
+            let visual = self.device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
+            self.root.AddVisual(&visual, false, &self.visual).map_err(|e| format!("AddVisual: {e}"))?;
+            Ok(visual)
         }
     }
 

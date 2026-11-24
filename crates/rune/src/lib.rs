@@ -222,6 +222,12 @@ pub use memo::region;
 pub use memo::region_with;
 pub use native_menu::MenuError;
 pub use native_menu::MenuItem;
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalHostCallback;
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalHostEvent;
+#[cfg(target_os = "windows")]
+pub use native_surface::ExternalLayer;
 pub use native_surface::NativeSurface;
 pub use native_surface::SurfaceFit;
 pub use open_url::OpenUrlError;

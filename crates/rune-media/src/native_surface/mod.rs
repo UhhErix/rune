@@ -149,6 +149,22 @@ pub struct FrameTiming {
     pub gpu_end_seconds: Option<f64>,
 }
 pub type FrameObserver = Arc<dyn Fn(FrameTiming) + Send + Sync>;
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExternalLayer {
+    pub id: u64,
+    pub handle: usize,
+}
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExternalHostEvent {
+    pub hwnd: isize,
+    pub dcomp_device: usize,
+    pub slot_visual: usize,
+    pub rect: [i32; 4],
+}
+#[cfg(target_os = "windows")]
+pub type ExternalHostCallback = Arc<dyn Fn(ExternalHostEvent) + Send + Sync>;
 struct State {
     latest: Option<Arc<Frame>>,
     revision: u64,
@@ -161,6 +177,10 @@ struct State {
     mirrored: bool,
     /// The player feeding this surface, pulled once per frame that draws it.
     video: Option<Arc<crate::video::Shared>>,
+    #[cfg(target_os = "windows")]
+    external_layer: Option<ExternalLayer>,
+    #[cfg(target_os = "windows")]
+    external_host: Option<ExternalHostCallback>,
 }
 
 impl Default for State {
@@ -176,6 +196,10 @@ impl Default for State {
             error: None,
             mirrored: false,
             video: None,
+            #[cfg(target_os = "windows")]
+            external_layer: None,
+            #[cfg(target_os = "windows")]
+            external_host: None,
         }
     }
 }
@@ -208,6 +232,50 @@ impl NativeSurface {
     #[doc(hidden)]
     pub fn video(&self) -> Option<Arc<crate::video::Shared>> {
         self.0.lock().unwrap().video.clone()
+    }
+    #[cfg(target_os = "windows")]
+    pub fn set_external_layer(&self, layer: Option<ExternalLayer>) {
+        let wake = {
+            let mut s = self.0.lock().unwrap();
+            if s.external_layer == layer {
+                return;
+            }
+            s.external_layer = layer;
+            s.revision = next_revision();
+            s.waker.clone()
+        };
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    pub fn external_layer(&self) -> Option<ExternalLayer> {
+        self.0.lock().unwrap().external_layer
+    }
+    #[cfg(target_os = "windows")]
+    pub fn set_external_host(&self, callback: Option<ExternalHostCallback>) {
+        let (old, wake) = {
+            let mut s = self.0.lock().unwrap();
+            let old = std::mem::replace(&mut s.external_host, callback);
+            s.revision = next_revision();
+            (old, s.waker.clone())
+        };
+        drop(old);
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    pub fn has_external_host(&self) -> bool {
+        self.0.lock().unwrap().external_host.is_some()
+    }
+    #[cfg(target_os = "windows")]
+    #[doc(hidden)]
+    pub fn notify_external_host(&self, event: ExternalHostEvent) {
+        let cb = self.0.lock().unwrap().external_host.clone();
+        if let Some(cb) = cb {
+            cb(event);
+        }
     }
     /// Updates the physical pixel size of the video element on screen for HLS ABR capping.
     #[doc(hidden)]
