@@ -292,3 +292,39 @@ fn dialog_without_on_close_renders_as_modal_without_close_button() {
     assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("confirm-dialog")));
     assert_eq!(focused(&rt).as_deref(), Some("behind"), "closing returns focus to the opener");
 }
+
+#[test]
+fn dialog_scrim_blur_and_liquid_glass_builders() {
+    use rune::render::{KIND_BACKDROP_BLUR, KIND_LIQUID_GLASS};
+    use rune::{Color, GlassPolicy, LiquidGlass};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        Dialog::new("sheet", "Capture")
+            .open(true)
+            .fit()
+            .scrim(Color::BLACK.alpha(0.72))
+            .scrim_blur(8.0)
+            .liquid_glass(LiquidGlass::panel())
+            .on_close(|_: &mut ()| {})
+            .child(el().w_full().h(40.0))
+            .build(&k, &mut layer);
+        root(el().w_full().h_full().fill(Color { r: 0.2, g: 0.5, b: 0.8, a: 1.0 }), layer)
+    }
+
+    let mut rt = Runtime::new((), view, (800.0, 600.0), Env::new(true, 1.0));
+    rt.set_glass_policy(GlassPolicy::Glass);
+    for _ in 0..60 { rt.frame(1.0 / 60.0); }
+    assert_eq!(
+        rt.instances.iter().filter(|i| i.params[1] == KIND_BACKDROP_BLUR).count(),
+        1,
+        "Dialog::scrim_blur emits one backdrop blur record"
+    );
+    assert_eq!(
+        rt.instances.iter().filter(|i| i.params[1] == KIND_LIQUID_GLASS).count(),
+        1,
+        "Dialog::liquid_glass emits one Liquid Glass record"
+    );
+    assert_eq!(rt.liquid_glass_frame().shapes.len(), 1);
+}

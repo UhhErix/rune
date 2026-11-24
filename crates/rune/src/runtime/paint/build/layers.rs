@@ -334,6 +334,48 @@ impl RuntimeCore {
         if !open_cache {
             strip_round_mask(clip, &mut own_round);
         }
+        // Modal backdrop scrim (`El::modal_scrim` / `El::modal_scrim_blur`): paints full-viewport
+        // dim + optional blur (within `max_backdrop_blurs`) behind this modal and ahead of any
+        // hoisted Liquid Glass surface so the underlying room stays visible and dimmed.
+        if let Some(scrim) = n.handlers.modal.as_ref().and_then(|m| m.scrim)
+            && !skip_paint
+            && visible
+            && effective_opacity > 0.001
+        {
+            let k_px = sc * s;
+            let vp_rect = [vp[0], vp[1], (vp[2] - vp[0]).max(0.0), (vp[3] - vp[1]).max(0.0)];
+            let mut scrim_insts = Vec::with_capacity(2);
+            if scrim.blur > 0.0 && self.paint.frame_backdrop_blurs < self.paint.max_backdrop_blurs() {
+                scrim_insts.push(Instance {
+                    rect: vp_rect,
+                    radii: [0.0; 4],
+                    fill: [0.0, 0.0, 0.0, effective_opacity],
+                    border: [0.0; 4],
+                    params: [scrim.blur * k_px, crate::render::KIND_BACKDROP_BLUR, 0.0, k_px],
+                    uv: [0.0; 4],
+                    clip: NO_CLIP,
+                    fade: [0; 4],
+                });
+                self.paint.frame_backdrop_blurs += 1;
+            }
+            if scrim.color.a > 0.0 {
+                scrim_insts.push(Instance {
+                    rect: vp_rect,
+                    radii: [0.0; 4],
+                    fill: premul(scrim.color, effective_opacity, self.paint.srgb_blend),
+                    border: [0.0; 4],
+                    params: [0.0, crate::render::KIND_RECT, 0.0, effective_opacity],
+                    uv: [0.0; 4],
+                    clip: NO_CLIP,
+                    fade: [0; 4],
+                });
+            }
+            if let Some(&(_, outer_layer_idx, _)) = layers.first() {
+                self.paint.glass.push_splice(outer_layer_idx, scrim_insts);
+            } else {
+                self.instances.extend(scrim_insts);
+            }
+        }
         // Open a Liquid Glass container (`El::glass_container` / `El::glass_group`) before its
         // own glass and descendants paint so all members share one capture and one SDF draw.
         if let Some(spacing) = n.vis.liquid_glass.as_deref().and_then(|g| g.container_spacing) {

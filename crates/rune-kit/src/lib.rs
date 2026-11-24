@@ -120,6 +120,7 @@ pub use overlays::overlay::Tooltip;
 pub use overlays::overlay::TooltipAppearance;
 pub use overlays::overlay::TooltipStyle;
 pub use overlays::overlay::body_text;
+pub use overlays::overlay::modal_scrim;
 pub use overlays::overlay::overlay_text;
 pub use overlays::overlay::scrim;
 pub use overlays::popover;

@@ -15,6 +15,7 @@ pub const FLAG_CURSOR_LIGHT: u32 = 1 << 3;
 pub const FLAG_REDUCED_TRANSPARENCY: u32 = 1 << 4;
 pub const FLAG_INCREASED_CONTRAST: u32 = 1 << 5;
 pub const FLAG_HAS_TINT: u32 = 1 << 6;
+pub const FLAG_BLUR_ONLY: u32 = 1 << 7;
 
 /// Maximum number of shapes evaluated in a single `KIND_LIQUID_GLASS` composite draw.
 pub const MAX_SHAPES_PER_DRAW: usize = 32;

@@ -685,6 +685,7 @@ pub(crate) fn refresh_focus_preferences(
     rt.set_system_contrast(crate::platform::preferences::contrast());
     rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
     rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency());
+    rt.set_glass_power_battery(crate::platform::preferences::on_battery());
     rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
     rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(scroll_bars_override));
 }

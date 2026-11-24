@@ -63,6 +63,7 @@ pub(crate) struct CxCore {
     pub(super) system_increased_contrast: bool,
     pub(super) system_reduced_transparency: bool,
     pub(super) glass_policy: crate::GlassPolicy,
+    pub(super) glass_tier: crate::GlassTier,
     pub(super) glass_dark: std::rc::Rc<HashMap<String, bool>>,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
@@ -136,12 +137,18 @@ impl CxCore {
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
     pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
     pub(crate) fn system_reduced_transparency(&self) -> bool { self.system_reduced_transparency }
+    pub(crate) fn glass_tier(&self) -> crate::GlassTier { self.glass_tier }
     pub(crate) fn glass_on(&self) -> bool {
         if self.system_contrast.is_some() { return false; }
         match self.glass_policy {
-            crate::GlassPolicy::Glass => true,
             crate::GlassPolicy::Solid => false,
-            crate::GlassPolicy::FollowSystem => !self.system_reduced_transparency && !self.system_increased_contrast,
+            crate::GlassPolicy::BlurOnly => true,
+            crate::GlassPolicy::Glass => self.glass_tier != crate::GlassTier::Solid,
+            crate::GlassPolicy::FollowSystem | crate::GlassPolicy::Auto => {
+                self.glass_tier != crate::GlassTier::Solid
+                    && !self.system_reduced_transparency
+                    && !self.system_increased_contrast
+            }
         }
     }
     pub(crate) fn glass_is_dark(&self, id: &str) -> bool {
@@ -318,9 +325,12 @@ impl<S> Cx<S> {
     /// Transparency effects, macOS Reduce Transparency, or `RUNE_REDUCE_TRANSPARENCY=1`).
     #[inline(always)]
     pub fn system_reduced_transparency(&self) -> bool { self.core.system_reduced_transparency() }
-    /// Whether live Liquid Glass is active under the current [`GlassPolicy`] and OS preferences.
+    /// Whether live Liquid Glass is active under the current [`GlassPolicy`], OS preferences and GPU tier.
     #[inline(always)]
     pub fn glass_on(&self) -> bool { self.core.glass_on() }
+    /// Active hardware-budgeted [`GlassTier`] (`Full`, `BlurOnly`, or `Solid`).
+    #[inline(always)]
+    pub fn glass_tier(&self) -> crate::GlassTier { self.core.glass_tier() }
     /// Whether the backdrop behind the glass element tagged with `El::glass_id(id)` is dark
     /// (smoothed with a 150 ms time constant and 0.45/0.55 hysteresis from async GPU probes).
     #[inline(always)]

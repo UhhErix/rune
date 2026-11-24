@@ -107,6 +107,7 @@ pub use el::Direction;
 pub use el::Drag;
 pub use el::El;
 pub use el::GlassPolicy;
+pub use el::GlassTier;
 pub use el::GridRow;
 pub use el::GrowthSpec;
 pub use el::{InlineIcon, InlineImage};

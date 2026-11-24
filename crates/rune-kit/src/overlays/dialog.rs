@@ -2,7 +2,7 @@
 //! the app's; its focus lifecycle is Rune's modal stack (`runtime/input/modal_focus.rs`), as
 //! Desktop's dialog stack has it (`ui/src/context/dialog-machine.ts`): the top dialog holds the
 //! trap, opens on its content and hands focus back to where it was before it opened.
-use rune::{El, TextStyle, col, el, row, text};
+use rune::{Color, El, LiquidGlass, TextStyle, col, el, row, text};
 use super::overlay::scrim_key;
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit};
 
@@ -15,13 +15,16 @@ pub struct Dialog {
     outside: bool,
     width: f32,
     fit: bool,
+    scrim: Option<Color>,
+    scrim_blur: f32,
+    glass: Option<LiquidGlass>,
     close: Option<Box<dyn FnOnce(El) -> El>>,
     button: Option<Box<dyn FnOnce(El) -> El>>,
 }
 impl Dialog {
     pub fn new(key: impl Into<String>, title: impl Into<String>) -> Self {
         Self { key: key.into(), title: title.into(), description: None, body: Vec::new(), open: false,
-            outside: true, width: 480.0, fit: false, close: None, button: None }
+            outside: true, width: 480.0, fit: false, scrim: None, scrim_blur: 0.0, glass: None, close: None, button: None }
     }
     pub fn open(mut self, open: bool) -> Self { self.open = open; self }
     pub fn description(mut self, description: impl Into<String>) -> Self { self.description = Some(description.into()); self }
@@ -33,6 +36,13 @@ impl Dialog {
     /// `.shrink().min_h(0.0)` so it takes what is left and scrolls.
     pub fn fit(mut self) -> Self { self.fit = true; self }
     pub fn click_outside(mut self, close: bool) -> Self { self.outside = close; self }
+    /// Overrides the modal backdrop scrim colour (defaults to `k.c.scrim`).
+    pub fn scrim(mut self, color: Color) -> Self { self.scrim = Some(color); self }
+    /// Blurs the window backdrop behind the modal scrim by `sigma` points (within `max_backdrop_blurs`).
+    pub fn scrim_blur(mut self, sigma: f32) -> Self { self.scrim_blur = sigma.max(0.0); self }
+    /// Renders the dialog surface with translucent [`LiquidGlass`] instead of opaque `k.c.layer_01`,
+    /// keeping the dimmed underlying room visible and blurred through the sheet.
+    pub fn liquid_glass(mut self, glass: LiquidGlass) -> Self { self.glass = Some(glass); self }
     /// Requests to dismiss the dialog: the header's close button, Escape, and outside clicks
     /// (when [`Self::click_outside`] is true). Without it the dialog still opens as a modal,
     /// leaves out the close button, and closes only from its own controls.
@@ -60,9 +70,15 @@ impl Dialog {
         }
         let body = col().key("body").w_full().shrink().min_h(0.0).children(self.body);
         let (panel, body) = if self.fit { (col(), body) } else { (col().h(368.0), body.grow(1.0)) };
-        let panel = panel.description(self.description.unwrap_or_default());
-        let panel = k.elevate(panel.key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
-            .w_full().max_w(self.width).shrink().min_h(0.0).radius(6.0).fill(k.c.layer_01)
+        let panel = panel.description(self.description.unwrap_or_default())
+            .key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
+            .w_full().max_w(self.width).shrink().min_h(0.0).radius(6.0);
+        let panel = if let Some(glass) = self.glass {
+            panel.liquid_glass(glass)
+        } else {
+            panel.fill(k.c.layer_01)
+        };
+        let panel = k.elevate(panel
             .child(header)
             .child(body)
             .token_motion(k.motion.overlay), &k.elevation.overlay);
@@ -70,8 +86,13 @@ impl Dialog {
             Some(close) => close(panel).modal_click_outside(self.outside),
             None => panel.modal_trap(),
         };
-        layer.push(el().key(scrim_key(&self.key)).absolute(0.0, 0.0).w_full().h_full()
-            .fill(k.c.scrim).token_motion(k.motion.overlay).a11y_hidden());
+        let scrim_color = self.scrim.unwrap_or(k.c.scrim);
+        let mut scrim_el = el().key(scrim_key(&self.key)).absolute(0.0, 0.0).w_full().h_full()
+            .fill(scrim_color).token_motion(k.motion.overlay).a11y_hidden();
+        if self.scrim_blur > 0.0 {
+            scrim_el = scrim_el.backdrop_blur(self.scrim_blur);
+        }
+        layer.push(scrim_el);
         layer.push(col().key(format!("{}-layer", self.key)).absolute(0.0, 0.0).w_full().h_full().padding(16.0).center().child(panel));
     }
 }

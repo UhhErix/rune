@@ -368,6 +368,7 @@ pub(super) struct Measurement<'a> {
     pub(super) system_increased_contrast: bool,
     pub(super) system_reduced_transparency: bool,
     pub(super) glass_policy: crate::GlassPolicy,
+    pub(super) glass_tier: crate::GlassTier,
     pub(super) glass_dark: std::rc::Rc<HashMap<String, bool>>,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) reduced_motion: bool,

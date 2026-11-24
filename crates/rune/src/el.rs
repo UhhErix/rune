@@ -71,7 +71,7 @@ pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
 pub use input::{InputSpec, auto_grow, edit_access, text_input};
 #[doc(hidden)]
 pub use layout::PathBind;
-pub use liquid_glass::{GlassPolicy, LiquidGlass};
+pub use liquid_glass::{GlassPolicy, GlassTier, LiquidGlass};
 pub(crate) use liquid_glass::{GlassNode, GlassVariant};
 pub use pills::{InlineIcon, InlineImage};
 pub(crate) use rare::{ElCold, ElFlags, RoleTag};

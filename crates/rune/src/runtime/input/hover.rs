@@ -418,8 +418,14 @@ impl RuntimeCore {
             if n.vis.tracks_press() && self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != down as u8 as f32 {
                 return true;
             }
-            if interactive_glass && self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != down as u8 as f32 {
-                return true;
+            if interactive_glass {
+                let press_target = (down && !self.reduced_motion) as u8 as f32;
+                let glow_target = down as u8 as f32;
+                if self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != press_target
+                    || self.scene.store().target(id, P_GLASS_GLOW).unwrap_or(0.0) != glow_target
+                {
+                    return true;
+                }
             }
             if let Some(k) = press_scale {
                 let want = if down && !self.reduced_motion { k } else { 1.0 };
@@ -492,15 +498,17 @@ impl RuntimeCore {
                 }
             }
             if interactive_glass {
-                let target = down as u8 as f32;
-                changed |= self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != target;
+                let press_target = (down && !self.reduced_motion) as u8 as f32;
+                let glow_target = down as u8 as f32;
+                changed |= self.scene.store().target(id, P_GLASS_PRESS).unwrap_or(0.0) != press_target;
+                changed |= self.scene.store().target(id, P_GLASS_GLOW).unwrap_or(0.0) != glow_target;
                 let spring = crate::render::liquid_glass::apple::press_spring(self.reduced_motion);
-                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_PRESS, 0.0, target) {
-                    self.scene.animate(id, P_GLASS_PRESS, target, Anim::from(spring));
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_PRESS, 0.0, press_target) {
+                    self.scene.animate(id, P_GLASS_PRESS, press_target, Anim::from(spring));
                 }
                 let glow_spring = crate::render::liquid_glass::apple::touch_glow_spring();
-                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_GLOW, 0.0, target) {
-                    self.scene.animate(id, P_GLASS_GLOW, target, Anim::from(glow_spring));
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_GLASS_GLOW, 0.0, glow_target) {
+                    self.scene.animate(id, P_GLASS_GLOW, glow_target, Anim::from(glow_spring));
                 }
             }
             if let Some(k) = press_scale {

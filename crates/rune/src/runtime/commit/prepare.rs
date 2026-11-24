@@ -74,6 +74,7 @@ impl RuntimeCore {
             system_increased_contrast: self.host.system_increased_contrast,
             system_reduced_transparency: self.host.system_reduced_transparency,
             glass_policy: self.host.glass_policy,
+            glass_tier: self.host.glass_budget.tier(),
             glass_dark: self.host.glass_dark.clone(),
             system_scroll_bars: self.host.scroll_bars.state,
             reduced_motion: self.reduced_motion,

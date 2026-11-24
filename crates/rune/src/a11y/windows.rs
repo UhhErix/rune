@@ -268,9 +268,9 @@ unsafe extern "system" fn subclass(hwnd: windows_sys::Win32::Foundation::HWND, m
                 return result.0;
             }
         }
-        // Reduced motion, a contrast theme or the system colours changed: the runtime reads them
-        // again, without waiting for the window's next activation.
-        WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED => {
+        // Reduced motion, a contrast theme, transparency effects, power source or system colours
+        // changed: the runtime reads them again live without waiting for focus.
+        WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED | 0x0320 | 0x0218 => {
             if let Ok(s) = shared.state.try_borrow() { s.activation.0.push(|i| i.settings = true); }
         }
         WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATEAPP | WM_ACTIVATE => {

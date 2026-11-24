@@ -32,3 +32,12 @@ fn cached_fallback_reads_once_off_the_calling_thread() {
     assert_eq!(CALLS.load(Ordering::Relaxed), 1);
     assert_ne!(WORKER_THREAD.get(), CALLER_THREAD.get(), "fallback must run off the calling UI thread");
 }
+
+#[test]
+fn windows_enable_transparency_maps_to_reduced_transparency() {
+    assert!(enable_transparency_to_reduced(0, 0));
+    assert!(!enable_transparency_to_reduced(0, 1));
+    assert!(!enable_transparency_to_reduced(2, 0));
+    let _ = reduced_transparency();
+    let _ = on_battery();
+}

@@ -227,6 +227,16 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn glass_policy(&self) -> crate::GlassPolicy { self.core().glass_policy() }
     #[inline(always)]
+    pub fn set_glass_adapter_info(&mut self, info: &wgpu::AdapterInfo, on_battery: bool) { self.core_mut().set_glass_adapter_info(info, on_battery); }
+    #[inline(always)]
+    pub fn set_glass_power_battery(&mut self, on_battery: bool) { self.core_mut().set_glass_power_battery(on_battery); }
+    #[inline(always)]
+    pub fn record_glass_frame_ms(&mut self, ms: f32) { self.core_mut().record_glass_frame_ms(ms); }
+    #[inline(always)]
+    pub fn set_glass_tier_override(&mut self, tier: Option<crate::GlassTier>) { self.core_mut().set_glass_tier_override(tier); }
+    #[inline(always)]
+    pub fn glass_tier(&self) -> crate::GlassTier { self.core().glass_tier() }
+    #[inline(always)]
     pub fn glass_on(&self) -> bool { self.core().glass_on() }
     #[inline(always)]
     pub fn glass_is_dark(&self, id: &str) -> bool { self.core().glass_is_dark(id) }

@@ -23,16 +23,39 @@ pub(crate) enum GlassVariant {
     Custom,
 }
 
-/// How Rune decides whether [`El::liquid_glass`] draws live glass or falls back to its solid
-/// `still` fill (`App::glass`, `Tx::set_glass_policy`).
+/// Effective rendering quality tier chosen for Liquid Glass (`Full -> BlurOnly -> Solid`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlassTier {
+    /// Full optical Liquid Glass: 7-mip pyramid, bevel refraction, dispersion, Fresnel & cursor
+    /// specular rim, and smooth-union container merging.
+    #[default]
+    Full,
+    /// Low-end iGPU / battery tier: sRGB frost blur + tone + tint + crisp hairline rim without
+    /// finite-difference bevel normals, refraction, chromatic dispersion or multi-lobe Fresnel.
+    BlurOnly,
+    /// Zero-capture solid frosted fallback (`still` fill, zero GPU glass work).
+    Solid,
+}
+
+/// How Rune decides whether [`El::liquid_glass`] draws live glass or falls back to blur-only /
+/// solid `still` fill (`App::glass`, `Tx::set_glass_policy`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum GlassPolicy {
-    /// Follow the system's Reduce Transparency / Increase Contrast / Contrast Theme settings.
+    /// Follow the system's Reduce Transparency / Increase Contrast / Contrast Theme settings
+    /// and apply low-end hardware auto-downgrade (`Full -> BlurOnly -> Solid`).
     #[default]
     FollowSystem,
-    /// Always render live Liquid Glass regardless of the OS Reduce Transparency toggle
-    /// (Windows high-contrast themes still use system contrast colours).
+    /// Always prefer live Liquid Glass regardless of the OS Reduce Transparency toggle
+    /// (Windows high-contrast themes still use system contrast colours, and software/overloaded
+    /// GPUs still auto-downgrade cleanly via [`GlassTier`]).
     Glass,
+    /// Adaptive auto-downgrade policy: starts from adapter class + battery state and steps down
+    /// `Full -> BlurOnly -> Solid` if measured glass frame cost exceeds budget, while honouring
+    /// system Reduce Transparency / Increase Contrast.
+    Auto,
+    /// Force the fast blur-only tier (sRGB frost + tint + hairline rim, skipping refraction and
+    /// dispersion).
+    BlurOnly,
     /// Always paint the solid `still` fallback with zero backdrop capture or blur work.
     Solid,
 }

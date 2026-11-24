@@ -225,9 +225,48 @@ pub(crate) fn reduced_transparency() -> bool {
                 &mut size,
             )
         };
-        status == 0 && enabled == 0
+        enable_transparency_to_reduced(status, enabled)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { false }
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn enable_transparency_to_reduced(status: i32, enabled: u32) -> bool {
+    status == 0 && enabled == 0
+}
+
+/// Whether the host is currently running on battery power (never read in the frame loop; sampled
+/// at window open, focus, and power-status change notifications for low-end GPU glass budgeting).
+pub(crate) fn on_battery() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        #[repr(C)]
+        struct SystemPowerStatus {
+            ac_line_status: u8,
+            battery_flag: u8,
+            battery_life_percent: u8,
+            system_status_flag: u8,
+            battery_life_time: u32,
+            battery_full_life_time: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetSystemPowerStatus(lp_system_power_status: *mut SystemPowerStatus) -> i32;
+        }
+        let mut s = SystemPowerStatus {
+            ac_line_status: 1,
+            battery_flag: 0,
+            battery_life_percent: 255,
+            system_status_flag: 0,
+            battery_life_time: u32::MAX,
+            battery_full_life_time: u32::MAX,
+        };
+        // SAFETY: `s` is a valid writable `SYSTEM_POWER_STATUS` struct.
+        let ok = unsafe { GetSystemPowerStatus(&mut s) };
+        ok != 0 && s.ac_line_status == 0
+    }
+    #[cfg(not(target_os = "windows"))]
     { false }
 }
 
