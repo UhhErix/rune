@@ -53,6 +53,8 @@ pub(super) struct Inbox {
 
 pub(super) enum News {
     Opened(Facts),
+    /// Metadata updated mid-stream (e.g. ABR variant switch changed video resolution).
+    Updated(Facts),
     Failed(String),
     /// Let go after `PARK` undrawn.
     Parked,
