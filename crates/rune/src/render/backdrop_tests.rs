@@ -108,3 +108,50 @@ fn backdrop_slot_degrades_when_the_target_cannot_be_copied() {
     assert!(error.is_none(), "{error:?}");
     assert_eq!(draws, 1);
 }
+
+#[test]
+fn layer_backdrop_is_allocated_only_when_an_effect_draws_inside_a_layer() {
+    let gpu = Gpu::headless();
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let mut slot = rect([0.0, 0.0, 16.0, 16.0], [0.0, 0.0, 0.0, 1.0]);
+    slot.params = [1.0, KIND_EFFECT, 0.0, 1.0];
+
+    // Root backdrop effect + unrelated isolated layer: must NOT allocate layers::FORMAT (Rgba16Float).
+    let root_only = [
+        Instance::begin_layer([0.0, 0.0, 32.0, 32.0], NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+        rect([0.0, 0.0, 16.0, 16.0], [1.0, 0.0, 0.0, 1.0]),
+        Instance::end_layer(),
+        slot,
+    ];
+    renderer.prepare(device, queue, &mut text.atlas, &root_only, (64, 64));
+    assert!(renderer.backdrops.iter().any(|b| b.format == OFFSCREEN_FORMAT));
+    assert!(
+        !renderer.backdrops.iter().any(|b| b.format == layers::FORMAT),
+        "unrelated isolated layer must not allocate Rgba16Float layer backdrop"
+    );
+
+    // Effect inside isolated layer: MUST allocate layers::FORMAT backdrop.
+    let inside_layer = [
+        Instance::begin_layer([0.0, 0.0, 32.0, 32.0], NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+        rect([0.0, 0.0, 16.0, 16.0], [1.0, 0.0, 0.0, 1.0]),
+        slot,
+        Instance::end_layer(),
+    ];
+    renderer.prepare(device, queue, &mut text.atlas, &inside_layer, (64, 64));
+    assert!(
+        renderer.backdrops.iter().any(|b| b.format == layers::FORMAT),
+        "effect inside isolated layer needs layers::FORMAT backdrop"
+    );
+
+    // Going back to root-only drops the stale layers::FORMAT backdrop.
+    renderer.prepare(device, queue, &mut text.atlas, &root_only, (64, 64));
+    assert!(!renderer.backdrops.iter().any(|b| b.format == layers::FORMAT));
+
+    // Visible rest give_back(false) drops transient backdrops and scratch layer targets.
+    let dropped = renderer.give_back(false, &mut text.atlas.resident_caches);
+    assert!(dropped);
+    assert!(renderer.backdrops.is_empty());
+    assert!(renderer.layers.targets.iter().all(Option::is_none));
+}

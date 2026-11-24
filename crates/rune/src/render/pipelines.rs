@@ -275,7 +275,7 @@ impl Renderer {
         }
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
-        if !self.backdrops.is_empty() && vw > 0 && vh > 0 {
+        if !self.backdrops.is_empty() && vw > 0 && vh > 0 && format != super::layers::FORMAT {
             self.ensure_backdrop(device, format, (vw, vh));
         }
         if let Some(s) = &mut self.surfaces { s.add_format(device, format); }

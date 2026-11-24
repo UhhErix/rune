@@ -320,6 +320,11 @@ impl LiquidGlassPass {
         self.stats.pyramid_bytes = 0;
     }
 
+    pub(super) fn unbind_backdrop(&mut self, format: wgpu::TextureFormat) {
+        self.first_down.retain(|(f, _)| *f != format);
+        self.composite_binds.retain(|(f, _)| *f != format);
+    }
+
     pub(super) fn bind_backdrop(
         &mut self,
         device: &wgpu::Device,

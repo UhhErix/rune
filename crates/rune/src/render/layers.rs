@@ -87,6 +87,13 @@ impl Layers {
         })
     }
 
+    /// Whether `at` falls inside any layer backed by an active offscreen target this frame.
+    pub(super) fn has_active_target_containing(&self, at: u32) -> bool {
+        self.plan.iter().enumerate().any(|(idx, l)| {
+            self.targets.get(idx).is_some_and(Option::is_some) && at > l.begin && at < l.end
+        })
+    }
+
     /// Kept textures get the budget left after this frame's visible caches.
     fn trim_retained(&mut self, active_bytes: u64) {
         let available = self.cache_budget.saturating_sub(active_bytes);
@@ -298,29 +305,38 @@ impl Renderer {
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
-    pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>) {
+    pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>) -> bool {
+        let mut dropped = !self.layers.retained.is_empty() || !self.layers.spare.is_empty();
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
         self.layers.trim_spare(0);
-        if all {
-            for slot in &mut self.layers.targets {
-                if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
+        // Transient non-cache scratch targets are overwritten on the next drawn frame and never
+        // read at rest; keep `El::cache` (`t.cache.is_some()`) targets resident while visible.
+        for slot in &mut self.layers.targets {
+            if slot.as_ref().is_some_and(|t| t.cache.is_none()) {
+                *slot = None;
+                dropped = true;
             }
         }
-        // The backdrop copies (one full-window texture per target format) and the blur pyramid:
-        // out of sight, or when the last frame read none (a session's jump button had blurred
-        // what was under it, and Home doesn't).
-        if all || !self.backdrop_used {
+        // Backdrop copies and blur/glass pyramids are pure transient scratch overwritten on every
+        // drawn frame; freeing them at rest reclaims 25-30 MiB of VRAM on 1080p Liquid Glass UIs.
+        if !self.backdrops.is_empty() {
             self.backdrops.clear();
-            if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
-            if let Some(lg) = &mut self.liquid_glass { lg.give_back(); }
+            dropped = true;
+        }
+        if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); dropped = true; }
+        if let Some(lg) = &mut self.liquid_glass { lg.give_back(); dropped = true; }
+        #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+        if self.give_back_damage() {
+            dropped = true;
         }
         if !all {
             self.uploads.trim_oversized();
         }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
+        dropped
     }
 
     /// Frees the staging chunks kept for reuse (`window::rest`, out of sight only: the next

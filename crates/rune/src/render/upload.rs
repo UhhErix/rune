@@ -346,10 +346,24 @@ impl Renderer {
         if self.backdrop_used {
             self.ensure_backdrop(device, self.format, viewport);
             for index in 0..self.extra.len() {
-                self.ensure_backdrop(device, self.extra[index].0, viewport);
+                let extra_fmt = self.extra[index].0;
+                if extra_fmt != layers::FORMAT {
+                    self.ensure_backdrop(device, extra_fmt, viewport);
+                }
             }
-            if self.layers.targets.iter().any(Option::is_some) {
+            let layer_needs_backdrop = self.effects.iter().any(|&(at, i)| {
+                (i.params[0] != 0.0 || matches!(i.kind(), Some(Kind::BackdropBlur | Kind::LiquidGlass)))
+                    && self.layers.has_active_target_containing(at)
+            });
+            if layer_needs_backdrop {
                 self.ensure_backdrop(device, layers::FORMAT, viewport);
+            } else if layers::FORMAT != self.format {
+                let had = self.backdrops.len();
+                self.backdrops.retain(|b| b.format != layers::FORMAT);
+                if self.backdrops.len() != had {
+                    if let Some(blur) = &mut self.backdrop_blur { blur.unbind_backdrop(layers::FORMAT); }
+                    if let Some(lg) = &mut self.liquid_glass { lg.unbind_backdrop(layers::FORMAT); }
+                }
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);

@@ -172,8 +172,22 @@ impl Renderer {
         d.looped = false;
         if let Some(c) = d.pixel.as_mut() { c.frame_ended(); }
         let drawn = d.drawn.take().unwrap_or(Err("not armed"));
-        if drawn.is_err() && let Some(r) = d.retained.as_mut() { r.current = false; }
+        if drawn.is_err() {
+            if self.redraws_in_place().is_err() {
+                d.retained = None;
+            } else if let Some(r) = d.retained.as_mut() {
+                r.current = false;
+            }
+        }
         drawn
+    }
+
+    pub(super) fn give_back_damage(&self) -> bool {
+        let mut d = self.damage.lock().unwrap();
+        let had = d.retained.take().is_some();
+        d.cycle = None;
+        d.loop_units = None;
+        had
     }
 
     /// Whether this frame can redraw only part of its target: nothing draws there but its own
