@@ -310,6 +310,8 @@ fn a_muted_clip_keeps_its_audio_stream_selected_and_with_no_sound_output() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
     let job = Job {
         source: MediaSource::File(path),
+        headers: Vec::new(),
+        hls: false,
         kind: Kind::Video,
         start: 0.0,
         generation: 0,
@@ -317,6 +319,8 @@ fn a_muted_clip_keeps_its_audio_stream_selected_and_with_no_sound_output() {
         sound: None,
         notify: Box::new(|| {}),
         clock: Arc::new(audio::Clock::default()),
+        display_size: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        active_variant: Arc::new(std::sync::Mutex::new(None)),
         started: rune_core::time::now(),
     };
     let d = Decoder::open(&job).unwrap();

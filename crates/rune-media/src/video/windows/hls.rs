@@ -7,7 +7,7 @@
 use super::super::Kind;
 use super::super::hls::http::CancelToken;
 use super::super::hls::prefetch::{FetchedSegment, HlsSession, NextSegment};
-use super::audio::Output;
+use super::audio::{Output, Queue};
 use super::decoder::{
     DEVICE_CHANGED, Facts, Job, Landing, Stream, log, logging, next_read, rune_device, superseded,
     us,
@@ -71,7 +71,9 @@ struct HlsDecoder {
     reader: IMFSourceReader,
     facts: Facts,
     ring: Option<Ring>,
+    audio_queue: Option<Queue>,
     output: Option<Output>,
+    output_on: bool,
     video: Option<u32>,
     audio: Option<u32>,
     video_open: bool,
@@ -151,6 +153,7 @@ impl HlsDecoder {
         };
         let opened_us = us(t0);
 
+        let audio_queue = opened.sound.map(Queue::new);
         let mut d = Self {
             session,
             lib,
@@ -159,7 +162,9 @@ impl HlsDecoder {
             reader: opened.reader,
             facts,
             ring,
+            audio_queue,
             output: None,
+            output_on: false,
             video: opened.video,
             audio: opened.audio,
             video_open: picture.is_some(),
@@ -172,7 +177,7 @@ impl HlsDecoder {
             awaiting_gpu,
             opened_us,
         };
-        d.select_sound(job.sound.is_some() || job.kind == Kind::Audio, &job.clock);
+        d.select_sound(job.sound, job.kind == Kind::Audio, &job.clock);
         Ok(Some(d))
     }
 
@@ -227,27 +232,36 @@ impl HlsDecoder {
             (job.notify)();
         }
 
-        let want_sound = self.output.is_some() || job.kind == Kind::Audio;
+        let want_sound = pipe.lock().sound;
         if sound_changed {
             self.output = None;
+            self.audio_queue = opened.sound.map(Queue::new);
         }
-        self.select_sound(want_sound, &job.clock);
+        self.select_sound(want_sound, job.kind == Kind::Audio, &job.clock);
         Ok(())
     }
 
-    fn select_sound(&mut self, on: bool, clock: &Arc<super::audio::Clock>) {
-        let Some(sound) = self.facts.sound else {
+    fn select_sound(&mut self, sound: Option<f32>, audio_only: bool, clock: &Arc<super::audio::Clock>) {
+        self.output_on = sound.is_some() || audio_only;
+        if !self.output_on {
+            self.output = None;
+            if let Some(index) = self.audio {
+                // SAFETY: stream selection on this thread's Media Foundation reader.
+                unsafe { self.reader.SetStreamSelection(index, false) }.ok();
+            }
+            self.audio_open = false;
+            return;
+        }
+        let Some(queue) = &self.audio_queue else {
             self.audio_open = false;
             return;
         };
-        if on && self.output.is_none() {
-            match Output::open(sound, clock.clone()) {
+        queue.set_gain(sound.unwrap_or(1.0));
+        if self.output.is_none() {
+            match Output::open(queue, clock.clone()) {
                 Ok(output) => self.output = Some(output),
                 Err(e) => eprintln!("rune: no sound for HLS clip: {e}"),
             }
-        }
-        if !on {
-            self.output = None;
         }
         if let Some(index) = self.audio {
             // SAFETY: stream selection on this thread's Media Foundation reader.
@@ -291,8 +305,8 @@ impl HlsDecoder {
                             landing = Landing::at(to);
                             epoch = 0.0;
                             let _ = self.session.seek(to, g);
-                            if let Some(o) = &self.output {
-                                o.flush();
+                            if let Some(q) = &self.audio_queue {
+                                q.flush();
                             }
                             match wait_for_segment(pipe, &self.session, g)? {
                                 Some(seg) => self.open_segment(&seg, job, pipe)?,
@@ -305,14 +319,14 @@ impl HlsDecoder {
                         }
                         continue;
                     }
-                    if self.output.is_some() != s.sound.is_some() {
-                        let on = s.sound.is_some();
+                    if self.output_on != (s.sound.is_some() || job.kind == Kind::Audio) {
+                        let want = s.sound;
                         drop(s);
-                        self.select_sound(on, &job.clock);
+                        self.select_sound(want, job.kind == Kind::Audio, &job.clock);
                         s = pipe.lock();
                     }
-                    if let (Some(o), Some(gain)) = (&self.output, s.sound) {
-                        o.set_gain(gain);
+                    if let (Some(q), Some(gain)) = (&self.audio_queue, s.sound) {
+                        q.set_gain(gain);
                     }
                     self.follow_layer(&mut s);
                     self.reclaim(&mut s);
@@ -324,7 +338,7 @@ impl HlsDecoder {
                     let ended = s.ended == Some(generation);
                     let room = s.frames.len() < AHEAD;
                     let texture = self.ring.as_ref().is_none_or(Ring::free);
-                    let sound_full = self.output.as_ref().is_some_and(Output::full);
+                    let sound_full = self.audio_queue.as_ref().is_some_and(Queue::full);
                     let sound = !ended && self.audio_open && !sound_full;
                     let picture = !ended && self.video_open && room && texture;
                     let idle = !ended && !self.video_open && !self.audio_open;
@@ -430,8 +444,8 @@ impl HlsDecoder {
                             first = false;
                         }
                     }
-                } else if let Some(o) = &self.output {
-                    o.push(&sample, pts, landing.skip_before, generation);
+                } else if let Some(q) = &self.audio_queue {
+                    let _ = q.push(&sample, pts, landing.skip_before);
                 }
             }
         }
