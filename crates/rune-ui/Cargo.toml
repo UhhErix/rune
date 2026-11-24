@@ -1,0 +1,21 @@
+[package]
+name = "rune-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Upstream-friendly, token-themable UI primitives, components, motion, GPU shader effects, and charts for Rune."
+
+[dependencies]
+bytemuck = { workspace = true }
+rune = { workspace = true }
+rune-fx = { workspace = true }
+rune-kit = { workspace = true }
+rune-motion = { workspace = true }
+wgpu = { workspace = true, features = ["std", "wgsl"] }
+
+[dev-dependencies]
+rune = { workspace = true, default-features = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
