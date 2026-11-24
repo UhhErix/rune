@@ -183,6 +183,13 @@ impl NativeSurface {
     pub fn video(&self) -> Option<Arc<crate::video::Shared>> {
         self.0.lock().unwrap().video.clone()
     }
+    /// Updates the physical pixel size of the video element on screen for HLS ABR capping.
+    #[doc(hidden)]
+    pub fn set_display_size(&self, width: u32, height: u32) {
+        if let Some(video) = self.video() {
+            video.set_display_size(width, height);
+        }
+    }
     /// Pull this frame's picture from the surface's video, if it has one.
     #[doc(hidden)]
     pub fn pull_video(&self, clock: crate::video::Clock, wake: &Arc<rune_core::live::Wake>) -> Option<crate::video::Pulled> {
