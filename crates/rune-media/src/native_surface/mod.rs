@@ -469,7 +469,7 @@ pub struct SurfaceDraw {
 /// Snapshot of what one [`SurfaceDraw`] draws and where, used by windows to skip unchanged
 /// timer frames without keeping the drawn frame alive.
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStamp {
     revision: u64,
     place: place::SurfacePlace,
@@ -673,7 +673,7 @@ mod tests {
         assert_ne!(s0, neg_zero.stamp(), "stamp compares f32 fields bit-for-bit");
 
         let mut placed = base.clone();
-        placed.surface = a.placed(place::SurfacePlace { anchor: [place::Align::Start; 2], unscaled: true });
+        placed.surface = a.placed(place::SurfacePlace { anchor: [0.0; 2], unscaled: true });
         assert_ne!(s0, placed.stamp(), "place change changes stamp");
 
         a.push_bytes(synthetic(16, 16, 1), 2).unwrap();

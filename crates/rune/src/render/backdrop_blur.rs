@@ -164,8 +164,7 @@ pub(in crate::render) fn levels(sigma: f32, top: usize) -> (usize, f32) {
 }
 
 impl BackdropBlur {
-    pub(super) fn new(device: &wgpu::Device, uber: &wgpu::BindGroupLayout, capacity: usize) -> Self {
-        let capacity = capacity.max(1);
+    pub(super) fn new(device: &wgpu::Device, uber: &wgpu::BindGroupLayout) -> Self {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -296,23 +295,6 @@ impl BackdropBlur {
     /// Points the first down pass at the pooled backdrop of `format` (new or resized).
     /// Drops the pyramid and the bindings of the pooled backdrops, which `Renderer::give_back`
     /// drops; the next blurred frame makes them again.
-    pub(super) fn ensure_capacity(&mut self, device: &wgpu::Device, capacity: usize, backdrops: &[Backdrop]) {
-        let capacity = capacity.max(1);
-        if self.capacity >= capacity { return; }
-        self.uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("backdrop blur levels"),
-            size: (capacity * SLOTS) as u64 * SLOT,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.capacity = capacity;
-        self.pyramid = None;
-        self.first.clear();
-        for bd in backdrops {
-            self.bind_backdrop(device, bd.format, &bd.view);
-        }
-    }
-
     pub(super) fn give_back(&mut self) {
         self.pyramid = None;
         self.first.clear();
