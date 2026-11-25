@@ -87,6 +87,34 @@ impl CyclePaint {
     pub(in crate::runtime) fn glyph(&mut self, quad: [f32; 4], drawn: bool) {
         if let Some(k) = self.open { self.slides[k].glyphs.push((quad, drawn)); }
     }
+
+    pub(in crate::runtime) fn shift_splices(&mut self, shifts: &[(usize, usize)]) {
+        let shift_at = |idx: usize| -> usize {
+            shifts.iter().filter(|&&(at, _)| at <= idx).map(|&(_, added)| added).sum()
+        };
+        for slot in &mut self.slots {
+            slot.at += shift_at(slot.at);
+        }
+        for icon in &mut self.icons {
+            icon.at += shift_at(icon.at);
+        }
+        for sl in &mut self.slides {
+            let old_start = sl.instances.start;
+            let old_end = sl.instances.end;
+            let (mut d_start, mut d_end) = (0usize, 0usize);
+            for &(at, added) in shifts {
+                if at <= old_start {
+                    d_start += added;
+                    d_end += added;
+                } else if at < old_end {
+                    d_end += added;
+                    sl.checked = Some(false);
+                }
+            }
+            sl.instances.start = old_start + d_start;
+            sl.instances.end = old_end + d_end;
+        }
+    }
 }
 
 /// `RUNE_LOOP_CHECK=1`: a frame a loop-only step could draw runs as an ordinary one, and the

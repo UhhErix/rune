@@ -734,7 +734,10 @@ impl RuntimeCore {
         self.keep_end();
         self.paint.close_all_layers(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), &mut layers, &mut active_cache, &mut glyph_count);
         self.paint.glass.close_all_containers(&mut self.instances);
-        self.paint.glass.flush_splices(&mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks);
+        let shifts = self.paint.glass.flush_splices(&mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks);
+        if !shifts.is_empty() {
+            self.keep_shift_splices(&shifts);
+        }
         // A moving chip can enter a stationary pointer. Re-evaluate against this frame's
         // geometry without inventing pointer-move or drag events on animation frames. Tooltips
         // follow the hold this decides.

@@ -496,6 +496,27 @@ impl RuntimeCore {
         }
     }
 
+    pub(in crate::runtime) fn keep_shift_splices(&mut self, shifts: &[(usize, usize)]) {
+        if self.paint.keep.recording {
+            for rec in &mut self.paint.keep.recs {
+                let (old_start, old_end) = (rec.inst[0] as usize, rec.inst[1] as usize);
+                let (mut d_start, mut d_end) = (0usize, 0usize);
+                for &(at, added) in shifts {
+                    if at <= old_start {
+                        d_start += added;
+                        d_end += added;
+                    } else if at < old_end {
+                        d_end += added;
+                        rec.keep = false;
+                    }
+                }
+                rec.inst[0] = (old_start + d_start) as u32;
+                rec.inst[1] = (old_end + d_end) as u32;
+            }
+        }
+        self.paint.keep.cycles.shift_splices(shifts);
+    }
+
 
     /// The end of a paint: what was moved is painted, and what wasn't kept is said.
     pub(in crate::runtime) fn keep_end(&mut self) {

@@ -208,16 +208,16 @@ impl GlassPaintState {
     }
 
     /// Applies all deferred hoisted / overflow glass record insertions in a single linear pass,
-    /// keeping `surfaces` and `marks` indices consistent.
+    /// keeping `surfaces` and `marks` indices consistent, and returns `(insert_before, added)` shifts.
     pub(in crate::runtime) fn flush_splices(
         &mut self,
         instances: &mut Vec<Instance>,
         surfaces: &mut [crate::native_surface::SurfaceDraw],
         marks: &mut Vec<u32>,
         track_marks: bool,
-    ) {
+    ) -> Vec<(usize, usize)> {
         if self.pending_splices.is_empty() {
-            return;
+            return Vec::new();
         }
         self.pending_splices.sort_by_key(|s| s.insert_before);
         let extra: usize = self.pending_splices.iter().map(|s| s.instances.len()).sum();
@@ -274,6 +274,7 @@ impl GlassPaintState {
         if track_marks {
             *marks = out_marks;
         }
+        shifts
     }
 }
 

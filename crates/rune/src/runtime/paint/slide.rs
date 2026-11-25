@@ -38,7 +38,7 @@ pub(in crate::runtime) struct Slide {
     /// Each glyph under it (x0, y0, x1, y1) and whether it drew.
     pub(super) glyphs: Vec<([f32; 4], bool)>,
     /// Its instances are what this record says they are: checked on the first step.
-    checked: Option<bool>,
+    pub(super) checked: Option<bool>,
 }
 
 /// What a step draws the window's instances with: their clip and packed fade.
