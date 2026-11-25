@@ -30,6 +30,7 @@ mod fly_text_extent;
 mod fly_text_scoped;
 mod font_families;
 mod font_swap;
+mod glass_splice_keep;
 mod growth_whole;
 mod headless_place;
 mod headless_screen_layout;
