@@ -568,12 +568,16 @@ impl RuntimeCore {
             glass.dispersion
         };
 
-        let (shadow_blur_px, shadow_y_px) = match glass.variant {
-            GlassVariant::Regular | GlassVariant::Clear => (
-                apple::shadow_blur_pt(w_pt, h_pt) * k_px,
-                apple::SHADOW_OFFSET_Y_PT * k_px,
-            ),
-            GlassVariant::Custom | GlassVariant::Identity => (0.0, 0.0),
+        let (shadow_blur_px, shadow_y_px) = if glass.shadow {
+            match glass.variant {
+                GlassVariant::Regular | GlassVariant::Clear => (
+                    apple::shadow_blur_pt(w_pt, h_pt) * k_px,
+                    apple::SHADOW_OFFSET_Y_PT * k_px,
+                ),
+                GlassVariant::Custom | GlassVariant::Identity => (0.0, 0.0),
+            }
+        } else {
+            (0.0, 0.0)
         };
 
         let mut mode_flags = match glass.variant {

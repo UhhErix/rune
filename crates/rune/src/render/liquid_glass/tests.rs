@@ -1152,3 +1152,57 @@ fn first_painted_frame_lands_materialized_even_after_startup_commit() {
         second_shapes[1].extra[3]
     );
 }
+
+#[test]
+fn default_liquid_glass_has_no_outer_drop_shadow_and_opt_in_shadow_works() {
+    let gpu = Gpu::headless();
+    let (w, h) = (280u32, 160u32);
+    let render_glass = |glass: LiquidGlass| {
+        let mut rt = Runtime::new(
+            glass,
+            |&g: &LiquidGlass, _: &mut Cx<LiquidGlass>| {
+                el().size(280.0, 160.0)
+                    .fill(Color {
+                        r: 0.88,
+                        g: 0.88,
+                        b: 0.88,
+                        a: 1.0,
+                    })
+                    .child(
+                        el().absolute(60.0, 40.0)
+                            .size(160.0, 60.0)
+                            .radius(30.0)
+                            .liquid_glass(g),
+                    )
+            },
+            (w as f32, h as f32),
+            Env::new(true, 1.0),
+        );
+        rt.set_glass_policy(GlassPolicy::Glass);
+        rt.frame(0.0);
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        render_runtime(&mut rt, &mut renderer, &gpu, w, h)
+    };
+
+    for preset in [LiquidGlass::regular(), LiquidGlass::clear()] {
+        let px = render_glass(preset);
+        let bg = px_at(&px, w, 10, 10);
+        for y in 103u32..=116 {
+            let below = px_at(&px, w, 140, y);
+            for ch in 0..3 {
+                assert!(
+                    (below[ch] as i32 - bg[ch] as i32).abs() <= 1,
+                    "default LiquidGlass must emit zero outer drop shadow at y={y}: below={below:?} bg={bg:?}"
+                );
+            }
+        }
+    }
+
+    let shadowed = render_glass(LiquidGlass::regular().shadow(true));
+    let bg = px_at(&shadowed, w, 10, 10);
+    let below_shadow = px_at(&shadowed, w, 140, 105);
+    assert!(
+        below_shadow[0] + 10 < bg[0],
+        "opt-in shadow(true) should visibly darken below pill: below={below_shadow:?} bg={bg:?}"
+    );
+}

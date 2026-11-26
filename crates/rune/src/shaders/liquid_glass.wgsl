@@ -348,8 +348,8 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     var dir = vec2<f32>(0.0, -1.0);
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     let min_half = min(half.x, half.y);
-    let lens_depth = clamp(bevel * 1.45, 4.0, max(min_half * 0.85, 4.0));
-    let near_edge = !blur_only && inside < max(lens_depth, bevel * 1.5) + 4.0;
+    let lens_depth = clamp(bevel * 1.65, 4.0, max(min_half * 0.88, 4.0));
+    let near_edge = !blur_only && inside < max(lens_depth, bevel * 1.75) + 4.0;
     if (near_edge) {
         let e = 0.75;
         let dx_p = eval_sdf_only(p + vec2<f32>(e, 0.0), first, count, k_eff);
@@ -364,29 +364,35 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         let hx = bevel_height(dx_p, bevel) - bevel_height(dx_m, bevel);
         let hy = bevel_height(dy_p, bevel) - bevel_height(dy_m, bevel);
         let grad_h = vec2<f32>(hx, hy) / (2.0 * e);
-        normal = normalize(vec3<f32>(-grad_h * bevel * 0.72, 1.0));
+        normal = normalize(vec3<f32>(-grad_h * bevel * 0.78, 1.0));
     }
 
-    // Smooth convex-bevel inward refraction: C2-smooth quadratic/quartic lensing across the
-    // bevel shoulder, bounded cleanly to the shape's half-extent so thin pills never jump across
-    // their opposite edge or tear neon chromatic artifacts at the outer rim.
+    // Physical convex-bevel optical lensing: C2-smooth Snell-like refraction accelerating smoothly
+    // across the curved bevel lip, keeping the flat centre undistorted and crisp while bending
+    // background light visibly around the curved meniscus.
     var bend = vec2<f32>(0.0);
-    if (!blur_only && !reduced_trans && s.bend.y > 0.001 && near_edge) {
-        let u = clamp(1.0 - inside / max(lens_depth, 1.0), 0.0, 1.0);
-        let u2 = u * u;
-        let curve = u2 * (0.40 + 0.60 * u2);
-        let max_disp = min(s.bend.y, max(min_half * 0.62, 2.0));
+    var bevel_u = 0.0;
+    let has_refract = !blur_only && !reduced_trans && s.bend.y > 0.001;
+    if (has_refract && near_edge) {
+        bevel_u = clamp(1.0 - inside / max(lens_depth, 1.0), 0.0, 1.0);
+        let u2 = bevel_u * bevel_u;
+        let curve = u2 * (0.28 + 0.72 * u2);
+        let max_disp = min(s.bend.y, max(min_half * 0.68, 2.0));
         let edge_fade = smoothstep(1.2, -0.5, d);
         bend = -dir * max_disp * curve * edge_fade * materialize;
     }
 
-    // Frost reconstruction + optional per-channel chromatic dispersion in the bevel band.
-    let sigma = s.tone.w * materialize;
+    // Edge-tapered frost reconstruction: full velvety frost in the flat interior transitioning
+    // smoothly into an optically clearer crystal bevel lip where refraction bends background edges,
+    // plus prismatic Cauchy R/G/B dispersion concentrated cleanly in the steep outer bevel.
+    let base_sigma = s.tone.w * materialize;
+    let edge_clear = bevel_u * bevel_u * (3.0 - 2.0 * bevel_u);
+    let sigma = select(base_sigma, base_sigma * mix(1.0, 0.22, edge_clear), has_refract);
     var c: vec3<f32>;
     if (epoch.flags.x > 0.5) {
         c = in.still.rgb;
-    } else if (!blur_only && !reduced_trans && s.bend.z > 0.0005 && dot(bend, bend) > 0.0025) {
-        let disp = s.bend.z;
+    } else if (has_refract && s.bend.z > 0.0005 && dot(bend, bend) > 0.0025) {
+        let disp = s.bend.z * (0.45 + 0.55 * bevel_u);
         let cr = frost_at(p + bend * (1.0 - disp), sigma).r;
         let cg = frost_at(p + bend, sigma).g;
         let cb = frost_at(p + bend * (1.0 + disp), sigma).b;
@@ -394,6 +400,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     } else {
         c = frost_at(p + bend, sigma);
     }
+    let c_refracted = c;
 
     // Backdrop saturation (per-shape * pass uniform) + variant tone & tint.
     let sat = max(s.tone.z * epoch.flags.z, 0.0);
@@ -487,18 +494,25 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         let simple_lit = clamp(s.rim.x * ring * materialize, 0.0, 1.0);
         c = clamp(c * (1.0 - simple_lit * 0.20) + s.rim_c.rgb * simple_lit, vec3<f32>(0.0), vec3<f32>(1.0));
     } else {
-        // Silky inner curved bevel meniscus + physical Fresnel wrap (fades smoothly to 0 in flat interior).
-        let edge_t = clamp(1.0 - inside / max(bevel * 1.15, 3.0), 0.0, 1.0);
-        let meniscus = edge_t * edge_t * edge_t;
-        let fresnel_phys = pow(clamp(1.0 - normal.z, 0.0, 1.0), 2.4);
-        let bevel_glow = max(fresnel_phys * 0.85, meniscus * 0.55);
+        // Curved crystal bevel meniscus + physical Schlick-like Fresnel wrap (0 in flat interior).
+        let edge_t = clamp(1.0 - inside / max(bevel * 1.20, 3.0), 0.0, 1.0);
+        let edge_t2 = edge_t * edge_t;
+        let meniscus = edge_t2 * edge_t * (0.45 + 0.55 * edge_t);
+        let fresnel_phys = pow(clamp(1.0 - normal.z, 0.0, 1.0), 2.8);
+        let bevel_glow = max(fresnel_phys * 0.92, meniscus * 0.44);
         let studio_dir = vec2<f32>(cos(s.light.x), sin(s.light.x));
         let studio_cos = dot(dir, studio_dir);
         let s_facing = clamp(studio_cos, 0.0, 1.0);
         let s_away = clamp(-studio_cos, 0.0, 1.0);
-        // Continuous glass edge wrap: subtle ambient perimeter + bright studio arc + opposing internal caustic.
-        let studio_lobes = 0.24 + 0.76 * (s_facing * s_facing) + 0.42 * (s_away * s_away * s_away);
-        let studio_fresnel = 0.16 + 0.68 * (s_facing * s_facing) + 0.34 * (s_away * s_away);
+        let sf2 = s_facing * s_facing;
+        let sf4 = sf2 * sf2;
+        let sf10 = sf4 * sf4 * sf2;
+        let sa2 = s_away * s_away;
+        let sa3 = sa2 * s_away;
+        let sa9 = sa3 * sa3 * sa3;
+        // Whisper-thin perimeter + crisp studio arc + tight diamond glint + opposing internal caustic.
+        let studio_lobes = 0.10 + 0.68 * sf2 + 0.58 * sf10 + 0.36 * sa3 + 0.24 * sa9;
+        let studio_fresnel = 0.08 + 0.64 * sf2 + 0.36 * sf4 + 0.32 * sa2 + 0.16 * sa3;
         var lobes = studio_lobes;
         var fresnel_w = studio_fresnel;
         if (cursor_light && epoch.pointer.z > 0.001) {
@@ -509,8 +523,11 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                 let cursor_cos = dot(dir, cursor_dir);
                 let c_facing = clamp(cursor_cos, 0.0, 1.0);
                 let c_away = clamp(-cursor_cos, 0.0, 1.0);
-                let aimed_lobes = 0.14 + 0.86 * (c_facing * c_facing) + 0.22 * (c_away * c_away * c_away);
-                let aimed_fresnel = 0.12 + 0.76 * (c_facing * c_facing) + 0.14 * (c_away * c_away);
+                let cf2 = c_facing * c_facing;
+                let cf8 = cf2 * cf2 * cf2 * cf2;
+                let ca3 = c_away * c_away * c_away;
+                let aimed_lobes = 0.09 + 0.78 * cf2 + 0.48 * cf8 + 0.22 * ca3;
+                let aimed_fresnel = 0.08 + 0.76 * cf2 + 0.18 * (c_away * c_away);
                 let lean = clamp(epoch.pointer.z * 0.65, 0.0, 0.65);
                 lobes = mix(studio_lobes, aimed_lobes, lean);
                 fresnel_w = mix(studio_fresnel, aimed_fresnel, lean);
@@ -518,10 +535,15 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         }
         let edge_a = select(mix(s.rim.y, s.rim.z, max(dir.y, 0.0)), mix(s.rim.y, s.rim.x, max(-dir.y, 0.0)), dir.y < 0.0);
         let spec_strength = s.rim_c.a;
-        let rim_hit = edge_a * lobes * ring * (0.50 + 0.50 * spec_strength);
-        let fresnel_hit = bevel_glow * fresnel_w * spec_strength * 0.18 * (0.40 + 0.60 * edge_a);
-        let lit = clamp((rim_hit + fresnel_hit) * materialize, 0.0, 1.0);
-        c = clamp(c + s.rim_c.rgb * lit * (vec3<f32>(1.0) - c * 0.38), vec3<f32>(0.0), vec3<f32>(1.0));
+        let rim_hit = edge_a * lobes * ring * (0.48 + 0.52 * spec_strength);
+        let fresnel_hit = bevel_glow * fresnel_w * spec_strength * 0.20 * (0.35 + 0.65 * edge_a);
+        // Subtle environmental tinting of the curved bevel meniscus from refracted scene color:
+        // stays pure neutral crystal over AMOLED #000000 and picks up real colored caustics over art.
+        let env_lum = clamp(dot(c_refracted, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        let env_tint = clamp(c_refracted * 1.45 + vec3<f32>(0.18), vec3<f32>(0.0), vec3<f32>(1.0));
+        let meniscus_rgb = mix(s.rim_c.rgb, env_tint, 0.40 * smoothstep(0.04, 0.55, env_lum));
+        let spec_rgb = s.rim_c.rgb * (rim_hit * materialize) + meniscus_rgb * (fresnel_hit * materialize);
+        c = clamp(c + spec_rgb * (vec3<f32>(1.0) - c * 0.34), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
     // Interactive hover brighten (+0.05) and radial touch glow from pointer contact.
