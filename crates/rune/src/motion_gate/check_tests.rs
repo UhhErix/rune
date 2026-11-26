@@ -341,8 +341,8 @@ fn a_long_matched_flight_from_rest_pairs_and_a_hard_turn_across_it_is_jerk() {
     assert!((after[0].1[2] - src_rect[2]).abs() > 12.0);
     let mut r = rec(vec![("board/hero", before.clone()), ("page/banner", after.clone())], 60);
     r.handover(30, "board/hero", "page/banner", src_rect, after[0].1);
-    let ks = kinds(&r);
-    assert!(!ks.iter().any(|k| ["bad-handover", "pop-out", "pop-in"].contains(k)), "a clean long flight pairs: {:?}", check(&r));
+    // What it still reports is the target's own track speeding up, as any one-track spring this hard would.
+    assert!(kinds(&r).iter().all(|k| *k == "jerk"), "a clean long flight pairs: {:?}", check(&r));
     assert_eq!(across(&r), 0, "a start from rest is no jerk: {:?}", check(&r));
 
     // Born 30 pt along its way, it jumped.
@@ -360,4 +360,12 @@ fn a_long_matched_flight_from_rest_pairs_and_a_hard_turn_across_it_is_jerk() {
     let ks = kinds(&r);
     assert!(!ks.iter().any(|k| ["bad-handover", "pop-out", "pop-in"].contains(k)), "a clean moving handover pairs: {:?}", check(&r));
     assert_eq!(across(&r), 1, "a kick across the handover is jerk: {:?}", check(&r));
+
+    // The same kick behind a clip that holds its shown part still shows nothing.
+    for t in &mut r.tracks {
+        for (_, s) in &mut t.frames {
+            s.vis = [0.0, 300.0, 60.0, 40.0];
+        }
+    }
+    assert_eq!(across(&r), 0, "a kick nobody sees: {:?}", check(&r));
 }

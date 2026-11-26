@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use super::{AXES, Finding, Recording, Snap, rule, seen, short};
+use super::{AXES, Finding, Recording, Snap, rule, seen, short, shown_edge};
 
 /// Maximum opacity difference between the source's last frame and the target's first frame.
 const OPACITY_TOL: f32 = 0.05;
@@ -167,18 +167,24 @@ pub(super) fn check(rec: &Recording, out: &mut Vec<Finding>) -> Paired {
 }
 
 /// The `jerk` of the step that crosses the handover: the source's last step against the
-/// target's first, which neither track sees alone. From rest it is no jerk, as on one track.
+/// target's first, which neither track sees alone. From rest it is no jerk, as on one track, and
+/// as there it is judged on what shows: an edge its clip hides can change step unseen.
 fn jerk_across(rec: &Recording, prev: Option<Snap>, src: Snap, dst: Snap) -> Option<String> {
     let shows = |s: &Snap| seen(s, rec.size) && s.op >= rule("faint");
     let prev = prev.filter(shows)?;
     if !shows(&src) || !shows(&dst) {
         return None;
     }
+    let jerk = rule("jerk");
     (0..4)
-        .map(|axis| (axis, src.rect[axis] - prev.rect[axis], dst.rect[axis] - src.rect[axis]))
-        .filter(|&(_, before, step)| before.abs() >= 0.5 && step.abs() >= 0.5 && (step - before).abs() > rule("jerk"))
+        .map(|axis| {
+            let shown = |s: &Snap| shown_edge(s, axis, rec.size);
+            let seen_change = (shown(&dst) - shown(&src)) - (shown(&src) - shown(&prev));
+            (axis, src.rect[axis] - prev.rect[axis], dst.rect[axis] - src.rect[axis], seen_change)
+        })
+        .filter(|&(_, before, step, seen_change)| before.abs() >= 0.5 && step.abs() >= 0.5 && (step - before).abs() > jerk && seen_change.abs() > jerk)
         .max_by(|a, b| (a.2 - a.1).abs().total_cmp(&(b.2 - b.1).abs()))
-        .map(|(axis, before, step)| {
+        .map(|(axis, before, step, _)| {
             format!("{} step {before:+.1} → {step:+.1} pt/frame ({:.0} → {:.0} pt/s)", AXES[axis], before as f64 * rec.hz, step as f64 * rec.hz)
         })
 }
