@@ -1088,3 +1088,67 @@ fn glass_aware_partial_damage_redraws_disjoint_rect_and_declines_overlapping_rec
     let (r3, _) = draw_with_damage(&mut rt, &mut renderer, &[[120, 12, 160, 40]]);
     assert_eq!(r3, Err("liquid glass"));
 }
+
+#[test]
+fn first_painted_frame_lands_materialized_even_after_startup_commit() {
+    struct State {
+        flag: bool,
+        show_extra: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> crate::El {
+        let mut root = el()
+            .size(400.0, 300.0)
+            .fill(Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 })
+            .child(
+                el().key("initial-glass")
+                    .size(200.0, 80.0)
+                    .radius(16.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            );
+        if s.show_extra {
+            root = root.child(
+                el().key("later-glass")
+                    .size(160.0, 60.0)
+                    .radius(12.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            );
+        }
+        let _ = s.flag;
+        root
+    }
+
+    let mut rt = Runtime::new(
+        State { flag: false, show_extra: false },
+        view,
+        (400.0, 300.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_glass_policy(GlassPolicy::Glass);
+    rt.set_system_reduced_motion(false);
+    // Simulate a startup poll/update committing before the very first frame paints.
+    rt.update(|s, _| s.flag = true);
+    rt.frame(0.0);
+
+    let first_shapes = &rt.liquid_glass_frame().shapes;
+    assert_eq!(first_shapes.len(), 1);
+    assert!(
+        first_shapes[0].extra[3] > 0.99,
+        "first painted frame must settle at materialize=1.0 even after a pre-paint commit, got {}",
+        first_shapes[0].extra[3]
+    );
+
+    // A glass element newly mounted on a subsequent animated commit still materializes from 0 -> 1.
+    rt.update(|s, _| s.show_extra = true);
+    rt.frame(1.0 / 60.0);
+    let second_shapes = &rt.liquid_glass_frame().shapes;
+    assert_eq!(second_shapes.len(), 2);
+    assert!(
+        second_shapes[0].extra[3] > 0.99,
+        "already-painted glass must stay materialized"
+    );
+    assert!(
+        second_shapes[1].extra[3] < 0.5,
+        "newly mounted glass on frame 2+ should start materialize ramp, got {}",
+        second_shapes[1].extra[3]
+    );
+}

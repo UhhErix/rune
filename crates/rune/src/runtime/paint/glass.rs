@@ -63,6 +63,9 @@ pub(in crate::runtime) struct GlassPaintState {
     seen_ids: HashMap<NodeId, bool>,
     /// Nodes seen in the current frame.
     curr_ids: HashMap<NodeId, bool>,
+    /// Number of painted frames entered so far (first painted frame must land settled at 1.0
+    /// even when a startup `poll` or queued update commits before the first paint).
+    painted_frames: u64,
     /// Last pointer contact point (points, window space) per interactive glass node for touch glow.
     pub(in crate::runtime) touch_points: HashMap<NodeId, [f32; 2]>,
     /// Debug once-warning flag for elements carrying both `backdrop_blur` and `liquid_glass`.
@@ -80,6 +83,7 @@ impl GlassPaintState {
         self.containers.clear();
         self.pending_splices.clear();
         self.next_group_id = 0;
+        self.painted_frames = self.painted_frames.saturating_add(1);
         std::mem::swap(&mut self.seen_ids, &mut self.curr_ids);
         self.curr_ids.clear();
     }
@@ -445,9 +449,11 @@ impl RuntimeCore {
             unreachable!();
         };
 
-        // Track appearance for unmatched materialize ramp (frame 1 lands settled at 1.0; newly
-        // mounted unmatched glass on later animated commits ramps 0 -> 1).
+        // Track appearance for unmatched materialize ramp (the first painted frame lands settled
+        // at 1.0 even if a startup poll/update already committed; newly mounted unmatched glass on
+        // later animated commits ramps 0 -> 1).
         let newly_mounted = !self.paint.glass.seen_ids.contains_key(&node_id)
+            && self.paint.glass.painted_frames > 1
             && self.commit.commits > 1
             && !self.motion.flying.iter().any(|f| f.0 == node_id)
             && !self.scene.store().has(node_id, P_GLASS_MATERIALIZE);

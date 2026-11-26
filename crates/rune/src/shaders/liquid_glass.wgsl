@@ -318,7 +318,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         let d_sh = eval_sdf_only(p - vec2<f32>(0.0, s.extra.y), first, count, k_eff);
         let soft = 1.0 - smoothstep(-sh_blur * 0.45, sh_blur * 1.5, d_sh);
         let outside = smoothstep(-0.5, 1.5, d);
-        let sh_op = mix(0.06, 0.20, bg_detail);
+        let sh_op = mix(0.20, 0.44, bg_detail);
         shadow_a = clamp(soft * outside * sh_op * shape_alpha, 0.0, 0.85);
     }
 
@@ -347,8 +347,9 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     // entirely in low-end `BlurOnly` mode so iGPUs avoid the 4 finite-difference SDF taps).
     var dir = vec2<f32>(0.0, -1.0);
     var normal = vec3<f32>(0.0, 0.0, 1.0);
-    let bend_depth = min(min(half.x, half.y), bevel / 0.17);
-    let near_edge = !blur_only && inside < max(bend_depth, bevel * 1.5) + 4.0;
+    let min_half = min(half.x, half.y);
+    let lens_depth = clamp(bevel * 1.45, 4.0, max(min_half * 0.85, 4.0));
+    let near_edge = !blur_only && inside < max(lens_depth, bevel * 1.5) + 4.0;
     if (near_edge) {
         let e = 0.75;
         let dx_p = eval_sdf_only(p + vec2<f32>(e, 0.0), first, count, k_eff);
@@ -366,16 +367,17 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         normal = normalize(vec3<f32>(-grad_h * bevel * 0.72, 1.0));
     }
 
-    // Subtle inward rim refraction: ratio^8 with smoothstep falloff at the outer edge
-    // (adapted from bilalgursen/liquid-glass, MIT). Disabled in `BlurOnly` and Reduce Transparency.
+    // Smooth convex-bevel inward refraction: C2-smooth quadratic/quartic lensing across the
+    // bevel shoulder, bounded cleanly to the shape's half-extent so thin pills never jump across
+    // their opposite edge or tear neon chromatic artifacts at the outer rim.
     var bend = vec2<f32>(0.0);
     if (!blur_only && !reduced_trans && s.bend.y > 0.001 && near_edge) {
-        let ratio = clamp(1.0 - inside / max(bend_depth, 1.0), 0.0, 1.0);
-        let r2 = ratio * ratio;
-        let r4 = r2 * r2;
-        let r8 = r4 * r4;
-        let edge_fade = smoothstep(1.5, -0.5, d);
-        bend = -dir * s.bend.y * r8 * edge_fade * materialize;
+        let u = clamp(1.0 - inside / max(lens_depth, 1.0), 0.0, 1.0);
+        let u2 = u * u;
+        let curve = u2 * (0.40 + 0.60 * u2);
+        let max_disp = min(s.bend.y, max(min_half * 0.62, 2.0));
+        let edge_fade = smoothstep(1.2, -0.5, d);
+        bend = -dir * max_disp * curve * edge_fade * materialize;
     }
 
     // Frost reconstruction + optional per-channel chromatic dispersion in the bevel band.
@@ -440,8 +442,8 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                     c = mix(c, vec3<f32>(0.0), select(0.28, 0.14, bright > 0.5));
                 }
             } else {
-                // Apple Clear: 35% dark dimming over bright backdrops (HIG Materials).
-                let dim_a = 0.35 * smoothstep(0.35, 0.65, bg_l);
+                // Apple Clear: clean legibility scrim over bright backdrops without muddying chroma.
+                let dim_a = 0.28 * smoothstep(0.38, 0.72, bg_l);
                 c = mix(c, vec3<f32>(0.0), dim_a);
                 if (reduced_trans) {
                     let cpuv = (center - epoch.pyramid_map.xy) * epoch.pyramid_map.zw;
@@ -477,7 +479,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         c = c * (1.0 - s.inner_c.a * ia) + s.inner_c.rgb * ia;
     }
 
-    // Rim light + Fresnel pow 6 + cursor-leaning two-lobe specular highlight.
+    // Rim light + smooth curved bevel meniscus/Fresnel + dual-lobe specular highlight.
     // In low-end `BlurOnly` mode, emit a cheap constant hairline rim without Fresnel/specular ALU.
     let rim_w = max(1.0, s.rim.w);
     let ring = clamp(0.5 - d, 0.0, 1.0) * (1.0 - smoothstep(0.45, 0.45 + rim_w, -d));
@@ -485,14 +487,18 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         let simple_lit = clamp(s.rim.x * ring * materialize, 0.0, 1.0);
         c = clamp(c * (1.0 - simple_lit * 0.20) + s.rim_c.rgb * simple_lit, vec3<f32>(0.0), vec3<f32>(1.0));
     } else {
-        let fresnel = pow(clamp(1.0 - normal.z, 0.0, 1.0), 6.0);
+        // Silky inner curved bevel meniscus + physical Fresnel wrap (fades smoothly to 0 in flat interior).
+        let edge_t = clamp(1.0 - inside / max(bevel * 1.15, 3.0), 0.0, 1.0);
+        let meniscus = edge_t * edge_t * edge_t;
+        let fresnel_phys = pow(clamp(1.0 - normal.z, 0.0, 1.0), 2.4);
+        let bevel_glow = max(fresnel_phys * 0.85, meniscus * 0.55);
         let studio_dir = vec2<f32>(cos(s.light.x), sin(s.light.x));
         let studio_cos = dot(dir, studio_dir);
         let s_facing = clamp(studio_cos, 0.0, 1.0);
         let s_away = clamp(-studio_cos, 0.0, 1.0);
-        // Two opposing specular lobes along the light axis (primary 1.0, opposite 0.45, 90 deg 0.10).
-        let studio_lobes = 0.10 + 0.90 * (s_facing * s_facing * s_facing) + 0.45 * (s_away * s_away * s_away);
-        let studio_fresnel = 0.14 + 0.66 * s_facing + 0.25 * s_away;
+        // Continuous glass edge wrap: subtle ambient perimeter + bright studio arc + opposing internal caustic.
+        let studio_lobes = 0.24 + 0.76 * (s_facing * s_facing) + 0.42 * (s_away * s_away * s_away);
+        let studio_fresnel = 0.16 + 0.68 * (s_facing * s_facing) + 0.34 * (s_away * s_away);
         var lobes = studio_lobes;
         var fresnel_w = studio_fresnel;
         if (cursor_light && epoch.pointer.z > 0.001) {
@@ -503,8 +509,8 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                 let cursor_cos = dot(dir, cursor_dir);
                 let c_facing = clamp(cursor_cos, 0.0, 1.0);
                 let c_away = clamp(-cursor_cos, 0.0, 1.0);
-                let aimed_lobes = 0.08 + 1.00 * (c_facing * c_facing * c_facing) + 0.20 * (c_away * c_away * c_away);
-                let aimed_fresnel = 0.10 + 0.80 * c_facing + 0.10 * c_away;
+                let aimed_lobes = 0.14 + 0.86 * (c_facing * c_facing) + 0.22 * (c_away * c_away * c_away);
+                let aimed_fresnel = 0.12 + 0.76 * (c_facing * c_facing) + 0.14 * (c_away * c_away);
                 let lean = clamp(epoch.pointer.z * 0.65, 0.0, 0.65);
                 lobes = mix(studio_lobes, aimed_lobes, lean);
                 fresnel_w = mix(studio_fresnel, aimed_fresnel, lean);
@@ -512,10 +518,10 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         }
         let edge_a = select(mix(s.rim.y, s.rim.z, max(dir.y, 0.0)), mix(s.rim.y, s.rim.x, max(-dir.y, 0.0)), dir.y < 0.0);
         let spec_strength = s.rim_c.a;
-        let rim_hit = edge_a * lobes * ring * (0.45 + 0.55 * spec_strength);
-        let fresnel_hit = fresnel * fresnel_w * spec_strength * 0.32;
+        let rim_hit = edge_a * lobes * ring * (0.50 + 0.50 * spec_strength);
+        let fresnel_hit = bevel_glow * fresnel_w * spec_strength * 0.18 * (0.40 + 0.60 * edge_a);
         let lit = clamp((rim_hit + fresnel_hit) * materialize, 0.0, 1.0);
-        c = clamp(c * (1.0 - lit * 0.25) + s.rim_c.rgb * lit, vec3<f32>(0.0), vec3<f32>(1.0));
+        c = clamp(c + s.rim_c.rgb * lit * (vec3<f32>(1.0) - c * 0.38), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
     // Interactive hover brighten (+0.05) and radial touch glow from pointer contact.
