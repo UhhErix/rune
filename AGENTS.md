@@ -1,7 +1,6 @@
-<!-- tallow -->
 # Rune
 
-A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 120 Hz on Mac, Windows, Linux, web and iOS. Views are plain Rust. Apps pin `dev` revs.
+A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 120 Hz on Mac, Windows, Linux, web and iOS. Views are plain Rust. Apps pin revs of this repo.
 
 ## Layout
 
@@ -30,8 +29,8 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 
 ## Changes
 
-- Work on `dev`. `production` deploys the site.
-- `dev` is fast-forward-only: never force-push or rewrite it. Apps pin its revs, so a rewrite breaks every app's build on a clean fetch.
+- `exo` is this fork's default branch: branch from it and open PRs against it. `dev` and `production` are upstream's branches (the weekly `exo-sync` workflow merges upstream into `exo`); don't push to them.
+- `exo` and `dev` are fast-forward-only: never force-push or rewrite them. Apps pin their revs, so a rewrite breaks every app's build on a clean fetch. Never merge your own PR.
 - For any change that can move an app's output or break its build, add `changelog/unreleased/<YYYY-MM-DD>-<slug>.md` with one top-level bullet, in the style of the `CHANGELOG.md` entries. `scripts/changelog-fold` folds them into `## dev`.
 - Keep Rust files under 800 non-test lines (`#[cfg(test)]` code excluded); 1,500 is a hard cap. The point is to stop god files and edit collisions, not to chop a file that reads fine as one piece. Older files over the cap are listed in `scripts/file-size-exceptions.txt` with ceilings that only go down. Run `scripts/file-size.sh` to check.
 - Keep folders shaped by capability: `x.rs` or `x/` beside two or more `x_*.rs` (or three or more `x_*.rs` alone) means move them into `x/`; a folder over 40 source files warns and over 60 is an error (tests aren't counted; `examples/`, `benches/` and `bin/` are skipped). `scripts/folder-shape.sh` runs inside `scripts/file-size.sh`; old violations are in `scripts/folder-shape-exceptions.txt` with ceilings that only go down.
@@ -60,6 +59,10 @@ App-side rules live in "Launching fast" in `crates/rune/README.md` and the "Laun
 - No file I/O in the frame loop: never read, stat, write, sync or rename a file on the UI thread during frames, input or animation. On Windows each open and `MoveFileExW` rename runs antivirus filter callbacks and can fail with a sharing violation.
 - No background rewrite churn: diagnostics and logs (`rune-perf`, traces) keep one open handle and write a summary on an incident or at shutdown, never on a repeating timer while idle.
 - Keep persistence APIs free of `std::fs` and `PathBuf` so `wasm32` targets can back them with browser storage.
+
+## Reviews
+
+Focus on correctness, unsafe code, security, the frame-loop and state-machine rules above, and the public-repo list below. Skip formatting and clippy-level style, `Cargo.lock`, and the vendored patched crates under `vendor/` unless the `.patch` file changed.
 
 ## This repo is public
 
