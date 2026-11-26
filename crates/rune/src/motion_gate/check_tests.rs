@@ -321,3 +321,43 @@ fn matched_handover_pairs_source_and_target_and_rejects_broken_or_unrecorded_rem
     assert!(ks.contains(&"pop-out"), "plain remount must still report pop-out: {ks:?}");
     assert!(ks.contains(&"pop-in"), "plain remount must still report pop-in: {ks:?}");
 }
+
+#[test]
+fn a_long_matched_flight_from_rest_pairs_and_a_hard_turn_across_it_is_jerk() {
+    let flight = |from: [f32; 4], to: [f32; 4], start: usize| -> Vec<(usize, [f32; 4], f32)> {
+        (0..30).map(|j| {
+            let t = (j + 1) as f32 / 3.0;
+            let p = 1.0 - (1.0 + t) * (-t).exp();
+            (start + j, std::array::from_fn(|a| from[a] + (to[a] - from[a]) * p), 1.0)
+        }).collect()
+    };
+    let across = |r: &Recording| check(r).into_iter().filter(|f| f.detail.contains("across the matched handover")).count();
+    let src_rect = [10.0, 100.0, 900.0, 500.0];
+    let dst_end = [20.0, 120.0, 300.0, 140.0];
+    let before: Vec<_> = (0..30).map(|k| (k, src_rect, 1.0)).collect();
+
+    // From rest, its first step is past 12 pt and under half the next one: one path.
+    let after = flight(src_rect, dst_end, 30);
+    assert!((after[0].1[2] - src_rect[2]).abs() > 12.0);
+    let mut r = rec(vec![("board/hero", before.clone()), ("page/banner", after.clone())], 60);
+    r.handover(30, "board/hero", "page/banner", src_rect, after[0].1);
+    let ks = kinds(&r);
+    assert!(!ks.iter().any(|k| ["bad-handover", "pop-out", "pop-in"].contains(k)), "a clean long flight pairs: {:?}", check(&r));
+    assert_eq!(across(&r), 0, "a start from rest is no jerk: {:?}", check(&r));
+
+    // Born 30 pt along its way, it jumped.
+    let ahead = [src_rect[0], src_rect[1], src_rect[2] - 30.0, src_rect[3]];
+    let jumped = flight(ahead, dst_end, 30);
+    let mut r = rec(vec![("board/hero", before), ("page/banner", jumped.clone())], 60);
+    r.handover(30, "board/hero", "page/banner", src_rect, jumped[0].1);
+    assert!(kinds(&r).contains(&"bad-handover"), "30 pt ahead: {:?}", check(&r));
+
+    // Gliding 5 pt a frame, the target's first step is 20, then 45: a clean handover, a hard kick.
+    let x = |k: usize| if k < 30 { 5.0 * k as f32 } else if k == 30 { 165.0 } else { 165.0 + 45.0 * (k - 30) as f32 };
+    let at = |k: usize| (k, [x(k), 300.0, 100.0, 40.0], 1.0);
+    let mut r = rec(vec![("left/card", (0..30).map(at).collect()), ("right/card", (30..40).map(at).collect())], 40);
+    r.handover(30, "left/card", "right/card", at(29).1, at(30).1);
+    let ks = kinds(&r);
+    assert!(!ks.iter().any(|k| ["bad-handover", "pop-out", "pop-in"].contains(k)), "a clean moving handover pairs: {:?}", check(&r));
+    assert_eq!(across(&r), 1, "a kick across the handover is jerk: {:?}", check(&r));
+}

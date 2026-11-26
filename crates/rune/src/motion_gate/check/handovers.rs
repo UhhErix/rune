@@ -2,12 +2,10 @@
 
 use std::collections::HashSet;
 
-use super::{Finding, Recording, rule, short};
+use super::{AXES, Finding, Recording, Snap, rule, seen, short};
 
 /// Maximum opacity difference between the source's last frame and the target's first frame.
 const OPACITY_TOL: f32 = 0.05;
-/// Cap on a long spring's first-frame step from rest when it continues accelerating on frame k + 1.
-const FIRST_STEP_CAP: f32 = 12.0;
 
 /// One recorded `El::matched` handover on frame `frame`: `from` left the tree as `to` took over.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,11 +120,12 @@ pub(super) fn check(rec: &Recording, out: &mut Vec<Finding>) -> Paired {
             if err.abs() <= rect_tol {
                 continue;
             }
-            // A long spring steps dt on frame k before painting; from rest, frame k's step is
-            // under half of frame k + 1's step in the same direction (about a third).
+            // A spring steps dt on frame k before painting; from rest, frame k's step is under
+            // half of frame k + 1's step in the same direction (about a third), however far it
+            // flies. How hard the step across changes is `jerk`'s to judge, below.
             let smooth_start = next.is_some_and(|n| {
                 let next_step = (n.rect[a] - dst.rect[a]) - vel[a];
-                err * next_step > 0.0 && err.abs() <= 0.5 * next_step.abs() + 1.0 && err.abs() <= FIRST_STEP_CAP
+                err * next_step > 0.0 && err.abs() <= 0.5 * next_step.abs() + 1.0
             });
             if !smooth_start {
                 worst = worst.max(err.abs());
@@ -158,6 +157,28 @@ pub(super) fn check(rec: &Recording, out: &mut Vec<Finding>) -> Paired {
 
         paired.deaths.insert((k, fi));
         paired.births.insert((k, ti));
+
+        let prev = k.checked_sub(2).and_then(|k2| rec.tracks[fi].at(k2)).copied();
+        if let Some(jerk) = jerk_across(rec, prev, src, dst) {
+            out.push(Finding { kind: "jerk", element: to_name, frame: k, detail: format!("{jerk} across the matched handover from {from_name}") });
+        }
     }
     paired
+}
+
+/// The `jerk` of the step that crosses the handover: the source's last step against the
+/// target's first, which neither track sees alone. From rest it is no jerk, as on one track.
+fn jerk_across(rec: &Recording, prev: Option<Snap>, src: Snap, dst: Snap) -> Option<String> {
+    let shows = |s: &Snap| seen(s, rec.size) && s.op >= rule("faint");
+    let prev = prev.filter(shows)?;
+    if !shows(&src) || !shows(&dst) {
+        return None;
+    }
+    (0..4)
+        .map(|axis| (axis, src.rect[axis] - prev.rect[axis], dst.rect[axis] - src.rect[axis]))
+        .filter(|&(_, before, step)| before.abs() >= 0.5 && step.abs() >= 0.5 && (step - before).abs() > rule("jerk"))
+        .max_by(|a, b| (a.2 - a.1).abs().total_cmp(&(b.2 - b.1).abs()))
+        .map(|(axis, before, step)| {
+            format!("{} step {before:+.1} → {step:+.1} pt/frame ({:.0} → {:.0} pt/s)", AXES[axis], before as f64 * rec.hz, step as f64 * rec.hz)
+        })
 }

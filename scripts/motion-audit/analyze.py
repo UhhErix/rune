@@ -460,7 +460,7 @@ def analyze(path, script=None):
             smooth_start = False
             if nxt is not None:
                 next_step = (nxt[a + 1] - dst[a + 1]) - vel[a]
-                smooth_start = err * next_step > 0.0 and abs(err) <= 0.5 * abs(next_step) + 1.0 and abs(err) <= JUMP_PT
+                smooth_start = err * next_step > 0.0 and abs(err) <= 0.5 * abs(next_step) + 1.0
             if not smooth_start:
                 worst = max(worst, abs(err))
         if worst > 0.0:
