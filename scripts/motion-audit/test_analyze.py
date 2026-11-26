@@ -306,6 +306,29 @@ def main():
     dim_first = {**after_ho[0], "root/card": (*after_ho[0]["root/card"][:4], 0.5), "@ho": [("root/board/card", "root/card", src_r, after_ho[0]["root/card"][:4])]}
     assert "bad-handover" in kinds(before_ho + [dim_first] + after_ho[1:]), "opacity mismatch"
 
+    def fast_rect(a, b, j):
+        t = (j + 1) / 3.0
+        p = 1.0 - (1.0 + t) * math.exp(-t)
+        return tuple(a[m] + (b[m] - a[m]) * p for m in range(4))
+    big_r = (10.0, 10.0, 380.0, 380.0)
+    before_big = hold({**still, "root/board/card": (*big_r, 1.0)}, 15)
+    after_big = [{**still, "root/card": (*fast_rect(big_r, (20.0, 20.0, 60.0, 60.0), j), 1.0)} for j in range(30)]
+    assert big_r[2] - after_big[0]["root/card"][2] > 12.0
+    long_flight = before_big + [{**after_big[0], "@ho": [("root/board/card", "root/card", big_r, after_big[0]["root/card"][:4])]}] + after_big[1:]
+    long_k = kinds(long_flight)
+    assert not {"bad-handover", "pop-out", "pop-in"} & set(long_k), f"long flight from rest: {long_k}"
+
+    drift = [{**still, "root/board/card": (10.0, 10.0 + k, 380.0, 370.0, 1.0)} for k in range(15)]
+    drift_src = drift[-1]["root/board/card"][:4]
+    drift_after = [{**still, "root/card": (*fast_rect(drift_src, (20.0, drift_src[1], 60.0, 60.0), j)[:1], drift_src[1] + j + 1, *fast_rect(drift_src, (20.0, drift_src[1], 60.0, 60.0), j)[2:], 1.0)} for j in range(30)]
+    drifting = drift + [{**drift_after[0], "@ho": [("root/board/card", "root/card", drift_src, drift_after[0]["root/card"][:4])]}] + drift_after[1:]
+    assert "bad-handover" not in kinds(drifting), f"long flight from rest on w while y drifts: {kinds(drifting)}"
+
+    glide = [{**still, "root/board/card": (5.0 * k, 115.0, 50.0, 25.0, 1.0)} for k in range(15)]
+    kick = [{**still, "root/card": (90.0 + 45.0 * j, 115.0, 50.0, 25.0, 1.0)} for j in range(6)]
+    kicked = glide + [{**kick[0], "@ho": [("root/board/card", "root/card", (70.0, 115.0, 50.0, 25.0), (90.0, 115.0, 50.0, 25.0))]}] + kick[1:]
+    assert "bad-handover" in kinds(kicked), f"kick across a moving handover: {kinds(kicked)}"
+
     plain_remount = before_ho + hold({**still, "root/card": (*src_r, 1.0)}, 30)
     plain_k = kinds(plain_remount)
     assert "pop-out" in plain_k and "pop-in" in plain_k, f"plain remount without handover: {plain_k}"
