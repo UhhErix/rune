@@ -117,6 +117,9 @@ const SIGMA_4: f32 = 30.63;
 const SIGMA_5: f32 = 61.27;
 const SIGMA_6: f32 = 122.55;
 
+// Share of the body tint and dimming the bevel lip sheds at the rim (`apple::LIP_CLARITY`).
+const LIP_CLARITY: f32 = 0.70;
+
 fn srgb_encode_ch(x: f32) -> f32 {
     let c = max(x, 0.0);
     return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);
@@ -401,6 +404,10 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         c = frost_at(p + bend, sigma);
     }
     let c_refracted = c;
+    // Crystal lip: the curved bevel is thinner glass, so body tint and dimming thin out toward the
+    // rim and the refracted backdrop reads through it. Zero in the flat interior, without refraction,
+    // and under Increase Contrast.
+    let lip = select(0.0, bevel_u * bevel_u * edge_clear * LIP_CLARITY, has_refract && !inc_contrast);
 
     // Backdrop saturation (per-shape * pass uniform) + variant tone & tint.
     let sat = max(s.tone.z * epoch.flags.z, 0.0);
@@ -433,7 +440,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                     light_mix = 0.78;
                     dark_mix = 0.92;
                 }
-                let dark_col = mix(c, vec3<f32>(0.0), dark_mix);
+                let dark_col = mix(c, vec3<f32>(0.0), dark_mix * (1.0 - lip));
                 let light_col = mix(c, vec3<f32>(1.0), light_mix);
                 c = mix(dark_col, light_col, bright);
                 if (reduced_trans) {
@@ -450,7 +457,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
                 }
             } else {
                 // Apple Clear: clean legibility scrim over bright backdrops without muddying chroma.
-                let dim_a = 0.28 * smoothstep(0.38, 0.72, bg_l);
+                let dim_a = 0.28 * smoothstep(0.38, 0.72, bg_l) * (1.0 - lip);
                 c = mix(c, vec3<f32>(0.0), dim_a);
                 if (reduced_trans) {
                     let cpuv = (center - epoch.pyramid_map.xy) * epoch.pyramid_map.zw;
@@ -465,7 +472,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
             }
             if (has_tint) {
                 let mapped_tint = mix(s.tint.rgb * 0.75, s.tint.rgb, bg_l);
-                let tint_a = select(s.tint.a, min(s.tint.a + 0.20, 0.92), inc_contrast);
+                let tint_a = select(s.tint.a * (1.0 - lip), min(s.tint.a + 0.20, 0.92), inc_contrast);
                 c = mix(c, mapped_tint, tint_a);
             }
         }

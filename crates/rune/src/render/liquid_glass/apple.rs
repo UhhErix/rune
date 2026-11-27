@@ -21,6 +21,10 @@ pub const REFRACTION_MULTIPLIER: f32 = 1.65;
 /// Chromatic dispersion per-channel offset fraction (`R * (1 - d), B * (1 + d)`).
 pub const DISPERSION: f32 = 0.03;
 
+/// Share of the body tint and dimming the bevel lip sheds at the rim, so the refracted backdrop reads
+/// through the edge of dark glass (`LIP_CLARITY` in `liquid_glass.wgsl`; 0 in the flat interior).
+pub const LIP_CLARITY: f32 = 0.70;
+
 /// Fresnel exponent (`pow(1 - normal.z, 6.0)` from `bilalgursen/liquid-glass`).
 pub const FRESNEL_POW: f32 = 6.0;
 
