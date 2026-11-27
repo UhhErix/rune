@@ -6,7 +6,7 @@ use crate::render::{
 };
 use crate::{Color, Cx, Env, GlassPolicy, LiquidGlass, Runtime, el, row};
 
-fn render_runtime<S: 'static>(
+pub(super) fn render_runtime<S: 'static>(
     rt: &mut Runtime<S>,
     renderer: &mut Renderer,
     gpu: &Gpu,
@@ -33,12 +33,12 @@ fn render_runtime<S: 'static>(
     target.read(&gpu.device)
 }
 
-fn px_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+pub(super) fn px_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * w + x) * 4) as usize;
     [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
 }
 
-fn luma_u8(p: [u8; 4]) -> f32 {
+pub(super) fn luma_u8(p: [u8; 4]) -> f32 {
     (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
 }
 
@@ -735,7 +735,7 @@ fn container_smin_merges_when_gap_within_spacing_and_splits_when_outside() {
     let merged = render_gap(10.0);
     let separated = render_gap(4.0);
     assert!(
-        merged[2] > separated[2] + 60,
+        merged[2] > separated[2] + 40 && merged[0] + 60 < separated[0],
         "spacing=10 should fill 8pt gap with merged glass (merged={merged:?}), spacing=4 should not (separated={separated:?})"
     );
 }

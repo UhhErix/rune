@@ -648,4 +648,6 @@ impl LiquidGlassPass {
 #[cfg(test)]
 mod bench_tests;
 #[cfg(test)]
+mod lip_tests;
+#[cfg(test)]
 mod tests;
