@@ -1088,3 +1088,121 @@ fn glass_aware_partial_damage_redraws_disjoint_rect_and_declines_overlapping_rec
     let (r3, _) = draw_with_damage(&mut rt, &mut renderer, &[[120, 12, 160, 40]]);
     assert_eq!(r3, Err("liquid glass"));
 }
+
+#[test]
+fn first_painted_frame_lands_materialized_even_after_startup_commit() {
+    struct State {
+        flag: bool,
+        show_extra: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> crate::El {
+        let mut root = el()
+            .size(400.0, 300.0)
+            .fill(Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 })
+            .child(
+                el().key("initial-glass")
+                    .size(200.0, 80.0)
+                    .radius(16.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            );
+        if s.show_extra {
+            root = root.child(
+                el().key("later-glass")
+                    .size(160.0, 60.0)
+                    .radius(12.0)
+                    .liquid_glass(LiquidGlass::regular()),
+            );
+        }
+        let _ = s.flag;
+        root
+    }
+
+    let mut rt = Runtime::new(
+        State { flag: false, show_extra: false },
+        view,
+        (400.0, 300.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_glass_policy(GlassPolicy::Glass);
+    rt.set_system_reduced_motion(false);
+    // Simulate a startup poll/update committing before the very first frame paints.
+    rt.update(|s, _| s.flag = true);
+    rt.frame(0.0);
+
+    let first_shapes = &rt.liquid_glass_frame().shapes;
+    assert_eq!(first_shapes.len(), 1);
+    assert!(
+        first_shapes[0].extra[3] > 0.99,
+        "first painted frame must settle at materialize=1.0 even after a pre-paint commit, got {}",
+        first_shapes[0].extra[3]
+    );
+
+    // A glass element newly mounted on a subsequent animated commit still materializes from 0 -> 1.
+    rt.update(|s, _| s.show_extra = true);
+    rt.frame(1.0 / 60.0);
+    let second_shapes = &rt.liquid_glass_frame().shapes;
+    assert_eq!(second_shapes.len(), 2);
+    assert!(
+        second_shapes[0].extra[3] > 0.99,
+        "already-painted glass must stay materialized"
+    );
+    assert!(
+        second_shapes[1].extra[3] < 0.5,
+        "newly mounted glass on frame 2+ should start materialize ramp, got {}",
+        second_shapes[1].extra[3]
+    );
+}
+
+#[test]
+fn default_liquid_glass_has_no_outer_drop_shadow_and_opt_in_shadow_works() {
+    let gpu = Gpu::headless();
+    let (w, h) = (280u32, 160u32);
+    let render_glass = |glass: LiquidGlass| {
+        let mut rt = Runtime::new(
+            glass,
+            |&g: &LiquidGlass, _: &mut Cx<LiquidGlass>| {
+                el().size(280.0, 160.0)
+                    .fill(Color {
+                        r: 0.88,
+                        g: 0.88,
+                        b: 0.88,
+                        a: 1.0,
+                    })
+                    .child(
+                        el().absolute(60.0, 40.0)
+                            .size(160.0, 60.0)
+                            .radius(30.0)
+                            .liquid_glass(g),
+                    )
+            },
+            (w as f32, h as f32),
+            Env::new(true, 1.0),
+        );
+        rt.set_glass_policy(GlassPolicy::Glass);
+        rt.frame(0.0);
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        render_runtime(&mut rt, &mut renderer, &gpu, w, h)
+    };
+
+    for preset in [LiquidGlass::regular(), LiquidGlass::clear()] {
+        let px = render_glass(preset);
+        let bg = px_at(&px, w, 10, 10);
+        for y in 103u32..=116 {
+            let below = px_at(&px, w, 140, y);
+            for ch in 0..3 {
+                assert!(
+                    (below[ch] as i32 - bg[ch] as i32).abs() <= 1,
+                    "default LiquidGlass must emit zero outer drop shadow at y={y}: below={below:?} bg={bg:?}"
+                );
+            }
+        }
+    }
+
+    let shadowed = render_glass(LiquidGlass::regular().shadow(true));
+    let bg = px_at(&shadowed, w, 10, 10);
+    let below_shadow = px_at(&shadowed, w, 140, 105);
+    assert!(
+        below_shadow[0] + 10 < bg[0],
+        "opt-in shadow(true) should visibly darken below pill: below={below_shadow:?} bg={bg:?}"
+    );
+}

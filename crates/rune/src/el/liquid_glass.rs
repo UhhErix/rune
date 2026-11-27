@@ -107,6 +107,8 @@ pub struct LiquidGlass {
     pub(crate) cursor_light: bool,
     /// Apple interactive glass: press spring, hover swell springs, gel stretch, drag follow, touch glow.
     pub(crate) interactive: bool,
+    /// Optional adaptive drop shadow outside the glass (off by default for clean borderless glass).
+    pub(crate) shadow: bool,
     /// Solid fallback colour used when glass is off (`GlassPolicy::Solid` or capture unavailable).
     pub(crate) still: Color,
 }
@@ -161,6 +163,7 @@ impl LiquidGlass {
             specular: [1.0, -std::f32::consts::FRAC_PI_4 * 3.0],
             cursor_light: true,
             interactive: false,
+            shadow: false,
             still: Color {
                 r: 0.14,
                 g: 0.14,
@@ -193,6 +196,7 @@ impl LiquidGlass {
             specular: [1.0, -std::f32::consts::FRAC_PI_4 * 3.0],
             cursor_light: true,
             interactive: false,
+            shadow: false,
             still: Color {
                 r: 0.0,
                 g: 0.0,
@@ -212,6 +216,7 @@ impl LiquidGlass {
             rim: [0.0; 3],
             specular: [0.0, 0.0],
             cursor_light: false,
+            shadow: false,
             ..Self::regular()
         }
     }
@@ -239,6 +244,7 @@ impl LiquidGlass {
             specular: [0.65, -std::f32::consts::FRAC_PI_4 * 3.0],
             cursor_light: true,
             interactive: false,
+            shadow: false,
             still: Color::BLACK.alpha(0.65),
         }
     }
@@ -408,6 +414,12 @@ impl LiquidGlass {
     /// Whether the rim specular highlight leans toward the cursor when hovered.
     pub fn cursor_light(mut self, enabled: bool) -> Self {
         self.cursor_light = enabled;
+        self
+    }
+
+    /// Whether to draw an adaptive outer drop shadow behind the glass (default `false`).
+    pub fn shadow(mut self, enabled: bool) -> Self {
+        self.shadow = enabled;
         self
     }
 
